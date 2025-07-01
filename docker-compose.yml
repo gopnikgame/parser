@@ -1,0 +1,18 @@
+services:
+  dnscrypt-parser:
+    build: .
+    container_name: dnscrypt-parser
+    environment:
+      - DISPLAY=:99
+    env_file:
+      - .env
+    volumes:
+      - ./output:/app/output
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    network_mode: host
+    restart: unless-stopped
+    command: >
+      sh -c "
+        Xvfb :99 -screen 0 1920x1080x24 &
+        python parser.py
+      "

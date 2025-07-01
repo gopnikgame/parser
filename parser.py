@@ -18,11 +18,27 @@ import os
 import requests
 import base64
 import json
+from dotenv import load_dotenv
+
+# Загружаем переменные окружения из .env файла
+load_dotenv()
 
 def get_default_chrome_options():
-    """Базовые опции Chrome согласно документации Selenium"""
+    """Базовые опции Chrome согласно документации Selenium для Docker"""
     options = webdriver.ChromeOptions()
     options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--disable-extensions")
+    options.add_argument("--window-size=1920,1080")
+    options.add_argument("--remote-debugging-port=9222")
+    options.add_argument("--disable-web-security")
+    options.add_argument("--allow-running-insecure-content")
+    
+    # Headless режим (по умолчанию включен в Docker)
+    if os.getenv('CHROME_HEADLESS', 'true').lower() == 'true':
+        options.add_argument("--headless")
+    
     return options
 
 def kill_existing_chrome():
@@ -98,22 +114,19 @@ def parse_config_file(filename):
         return []
 
 def setup_driver():
-    """Простая настройка драйвера Chrome"""
+    """Настройка драйвера Chrome для Docker окружения"""
     kill_existing_chrome()
     
     try:
         options = get_default_chrome_options()
-        options.add_argument("--disable-dev-shm-usage") 
-        options.add_argument("--disable-extensions")
-        options.add_argument("--window-size=1920,1080")
-        options.add_argument("--headless")  # Включаем headless режим
         
+        # В Docker среде ChromeDriver должен быть в PATH
         driver = webdriver.Chrome(options=options)
-        print("✅ Chrome успешно запущен")
+        print("✅ Chrome успешно запущен в Docker")
         return driver
         
     except WebDriverException as e:
-        print(f"❌ Ошибка запуска Chrome: {str(e)}")
+        print(f"❌ Ошибка запуска Chrome в Docker: {str(e)}")
         return None
 
 def wait_for_page_load(driver, timeout=30):
@@ -477,16 +490,21 @@ def update_config_file(filename, servers_data, is_relay_file=False):
                 # Оставляем оригинальную строку
                 updated_lines.append(line)
         
+        # Создаем директорию output если её нет
+        output_dir = '/app/output' if os.path.exists('/app') else './output'
+        os.makedirs(output_dir, exist_ok=True)
+        
         # Создаем резервную копию ОРИГИНАЛЬНОГО файла
-        backup_filename = f"{filename}.original_backup"
+        backup_filename = os.path.join(output_dir, f"{os.path.basename(filename)}.original_backup")
         with open(backup_filename, 'w', encoding='utf-8') as f:
             f.writelines(lines)
         
-        # Записываем обновленный файл
-        with open(filename, 'w', encoding='utf-8') as f:
+        # Записываем обновленный файл в output
+        output_filename = os.path.join(output_dir, os.path.basename(filename))
+        with open(output_filename, 'w', encoding='utf-8') as f:
             f.writelines(updated_lines)
         
-        print(f"✅ Файл {filename} обновлен. Обновлено серверов: {updated_count}")
+        print(f"✅ Файл {output_filename} обновлен. Обновлено серверов: {updated_count}")
         print(f"💾 Резервная копия оригинала: {backup_filename}")
         
         return updated_count
@@ -545,16 +563,16 @@ def process_servers(driver, servers, file_type):
     return servers_data, successful_count
 
 # =====================================================================
-# НОВЫЕ ФУНКЦИИ ДЛЯ РАБОТЫ С GITHUB API
+# ОБНОВЛЕННЫЕ ФУНКЦИИ ДЛЯ РАБОТЫ С GITHUB API (используют .env)
 # =====================================================================
 
 def get_github_config():
-    """Настройки GitHub репозитория"""
+    """Настройки GitHub репозитория из переменных окружения"""
     return {
-        'owner': 'gopnikgame',
-        'repo': 'Installer_dnscypt',
+        'owner': os.getenv('GITHUB_OWNER', 'gopnikgame'),
+        'repo': os.getenv('GITHUB_REPO', 'Installer_dnscypt'),
         'token': os.getenv('GITHUB_TOKEN'),
-        'branch': 'main'
+        'branch': os.getenv('GITHUB_BRANCH', 'main')
     }
 
 def get_file_sha(owner, repo, path, token, branch='main'):
@@ -585,7 +603,7 @@ def create_github_commit(files_to_commit, commit_message):
         config = get_github_config()
         
         if not config['token']:
-            print("❌ GitHub token не найден")
+            print("❌ GitHub token не найден в переменных окружения")
             return False
         
         headers = {
@@ -699,15 +717,20 @@ def push_to_github(total_updated):
     print(f"\n🚀 ОТПРАВКА ОБНОВЛЕНИЙ В GITHUB")
     print("="*60)
     
+    # Определяем пути к файлам
+    output_dir = '/app/output' if os.path.exists('/app') else './output'
+    
     # Подготавливаем список файлов для коммита
     files_to_commit = {}
     
-    if os.path.exists('DNSCrypt_relay.txt'):
-        files_to_commit['DNSCrypt_relay.txt'] = 'lib/DNSCrypt_relay.txt'
+    relay_file = os.path.join(output_dir, 'DNSCrypt_relay.txt')
+    if os.path.exists(relay_file):
+        files_to_commit[relay_file] = 'lib/DNSCrypt_relay.txt'
         print(f"✅ Добавлен в коммит: DNSCrypt_relay.txt")
     
-    if os.path.exists('DNSCrypt_servers.txt'):
-        files_to_commit['DNSCrypt_servers.txt'] = 'lib/DNSCrypt_servers.txt'
+    servers_file = os.path.join(output_dir, 'DNSCrypt_servers.txt')
+    if os.path.exists(servers_file):
+        files_to_commit[servers_file] = 'lib/DNSCrypt_servers.txt'
         print(f"✅ Добавлен в коммит: DNSCrypt_servers.txt")
     
     if not files_to_commit:
@@ -719,7 +742,8 @@ def push_to_github(total_updated):
     commit_message = f"🤖 Автоматическое обновление списков серверов\n\n" \
                     f"- Обновлено серверов: {total_updated}\n" \
                     f"- Дата обновления: {timestamp}\n" \
-                    f"- Источник: dnscrypt.info/public-servers\n\n" \
+                    f"- Источник: dnscrypt.info/public-servers\n" \
+                    f"- Контейнер: Docker\n\n" \
                     f"Автоматически сгенерировано парсером"
     
     print(f"📝 Сообщение коммита: {commit_message.split()[0]} ...")
@@ -728,26 +752,29 @@ def push_to_github(total_updated):
     success = create_github_commit(files_to_commit, commit_message)
     
     if success:
+        config = get_github_config()
         print(f"\n🎉 ФАЙЛЫ УСПЕШНО ОТПРАВЛЕНЫ В GITHUB!")
         print(f"📁 Обновлено файлов: {len(files_to_commit)}")
-        print(f"🔗 Ссылка: https://github.com/gopnikgame/Installer_dnscypt/tree/main/lib")
+        print(f"🔗 Ссылка: https://github.com/{config['owner']}/{config['repo']}/tree/{config['branch']}/lib")
         
         # Добавляем информацию в отчет
-        if os.path.exists("update_report.txt"):
-            with open("update_report.txt", "a", encoding="utf-8") as f:
+        report_file = os.path.join(output_dir, "update_report.txt")
+        if os.path.exists(report_file):
+            with open(report_file, "a", encoding="utf-8") as f:
                 f.write(f"\n# РЕЗУЛЬТАТ ОТПРАВКИ В GITHUB\n")
                 f.write(f"Статус: ✅ УСПЕШНО\n")
                 f.write(f"Время отправки: {timestamp}\n")
                 f.write(f"Обновлено файлов: {len(files_to_commit)}\n")
-                f.write(f"Репозиторий: https://github.com/gopnikgame/Installer_dnscypt\n")
+                f.write(f"Репозиторий: https://github.com/{config['owner']}/{config['repo']}\n")
         
         return True
     else:
         print(f"\n❌ НЕ УДАЛОСЬ ОТПРАВИТЬ ФАЙЛЫ В GITHUB")
         
         # Добавляем информацию об ошибке в отчет
-        if os.path.exists("update_report.txt"):
-            with open("update_report.txt", "a", encoding="utf-8") as f:
+        report_file = os.path.join(output_dir, "update_report.txt")
+        if os.path.exists(report_file):
+            with open(report_file, "a", encoding="utf-8") as f:
                 f.write(f"\n# РЕЗУЛЬТАТ ОТПРАВКИ В GITHUB\n")
                 f.write(f"Статус: ❌ ОШИБКА\n")
                 f.write(f"Время попытки: {timestamp}\n")
@@ -759,7 +786,7 @@ def setup_github_token_instructions():
     print("\n" + "="*60)
     print("🔑 НАСТРОЙКА GITHUB TOKEN")
     print("="*60)
-    print("Для автоматической отправки в GitHub нужен Personal Access Token:")
+    print("Для автоматической отправки в GitHub создайте .env файл:")
     print()
     print("1️⃣ Перейдите на: https://github.com/settings/tokens")
     print("2️⃣ Нажмите 'Generate new token (classic)'")
@@ -767,17 +794,14 @@ def setup_github_token_instructions():
     print("   - ✅ repo (full control of private repositories)")
     print("   - ✅ workflow (update GitHub Action workflows)")
     print("4️⃣ Скопируйте созданный токен")
-    print("5️⃣ Добавьте в переменные окружения:")
+    print("5️⃣ Создайте файл .env:")
     print()
-    print("   Linux/Mac:")
-    print("   export GITHUB_TOKEN='your_token_here'")
-    print("   echo 'export GITHUB_TOKEN=\"your_token_here\"' >> ~/.bashrc")
+    print("   GITHUB_TOKEN=your_token_here")
+    print("   GITHUB_OWNER=gopnikgame")
+    print("   GITHUB_REPO=Installer_dnscypt")
+    print("   GITHUB_BRANCH=main")
     print()
-    print("   Windows:")
-    print("   set GITHUB_TOKEN=your_token_here")
-    print("   setx GITHUB_TOKEN \"your_token_here\"")
-    print()
-    print("6️⃣ Перезапустите скрипт")
+    print("6️⃣ Перезапустите контейнер")
     print("="*60)
 
 # =====================================================================
@@ -786,13 +810,18 @@ def setup_github_token_instructions():
 
 def main():
     """Главная функция"""
-    print("🚀 Запуск автоматизированного парсера DNSCrypt серверов")
+    print("🚀 Запуск автоматизированного парсера DNSCrypt серверов (Docker)")
     print("=" * 60)
     
+    # Создаем директорию output
+    output_dir = '/app/output' if os.path.exists('/app') else './output'
+    os.makedirs(output_dir, exist_ok=True)
+    
     # URLs файлов на GitHub
+    config = get_github_config()
     github_urls = {
-        'DNSCrypt_relay.txt': 'https://github.com/gopnikgame/Installer_dnscypt/blob/main/lib/DNSCrypt_relay.txt',
-        'DNSCrypt_servers.txt': 'https://github.com/gopnikgame/Installer_dnscypt/blob/main/lib/DNSCrypt_servers.txt'
+        'DNSCrypt_relay.txt': f'https://github.com/{config["owner"]}/{config["repo"]}/blob/{config["branch"]}/lib/DNSCrypt_relay.txt',
+        'DNSCrypt_servers.txt': f'https://github.com/{config["owner"]}/{config["repo"]}/blob/{config["branch"]}/lib/DNSCrypt_servers.txt'
     }
     
     # Скачиваем файлы во временную папку
@@ -878,10 +907,11 @@ def main():
             updated_count = update_config_file('DNSCrypt_servers.txt', server_data, is_relay_file=False)
             total_updated += updated_count
         
-        # Создаем сводный отчет
+        # Создаем сводный отчет в output директории
         if total_updated > 0:
-            with open("update_report.txt", "w", encoding="utf-8") as f:
-                f.write("# Отчет об обновлении DNSCrypt серверов\n")
+            report_file = os.path.join(output_dir, "update_report.txt")
+            with open(report_file, "w", encoding="utf-8") as f:
+                f.write("# Отчет об обновлении DNSCrypt серверов (Docker)\n")
                 f.write(f"# Дата: {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n")
                 f.write(f"Всего серверов обработано: {total_processed}\n")
                 f.write(f"Успешно обновлено: {total_updated}\n\n")
@@ -897,9 +927,9 @@ def main():
                     for name, info in server_data.items():
                         f.write(f"{name:<30} -> {info['ip']} ({info['protocol']})\n")
             
-            print("✅ Отчет сохранен в update_report.txt")
+            print(f"✅ Отчет сохранен в {report_file}")
             print(f"\n🎉 УСПЕШНО ЗАВЕРШЕНО!")
-            print(f"📁 Созданы обновленные файлы:")
+            print(f"📁 Созданы обновленные файлы в {output_dir}:")
             print(f"   - DNSCrypt_relay.txt ({relay_successful} серверов)")
             print(f"   - DNSCrypt_servers.txt ({server_successful} серверов)")
             print(f"   - update_report.txt (отчет)")
@@ -917,18 +947,8 @@ def main():
             if not github_token:
                 print("⚠️ GitHub token не найден в переменных окружения")
                 setup_github_token_instructions()
-                
-                # Спрашиваем пользователя
-                try:
-                    user_input = input("\nВведите GitHub token для автоматической отправки (или Enter для пропуска): ").strip()
-                    if user_input:
-                        os.environ['GITHUB_TOKEN'] = user_input
-                        push_to_github(total_updated)
-                    else:
-                        print("⚠️ Отправка в GitHub пропущена")
-                        print("💡 Для автоматической отправки настройте переменную GITHUB_TOKEN")
-                except KeyboardInterrupt:
-                    print("\n⚠️ Отправка в GitHub отменена пользователем")
+                print("⚠️ Отправка в GitHub пропущена")
+                print("💡 Для автоматической отправки настройте .env файл с GITHUB_TOKEN")
             else:
                 # Автоматическая отправка
                 print("🔑 GitHub token найден, начинаем отправку...")
@@ -961,7 +981,8 @@ def main():
                 print(f"⚠️ Не удалось удалить {temp_file}: {e}")
         
         print("\n✅ ПАРСИНГ ЗАВЕРШЕН!")
-        print("🔗 Репозиторий: https://github.com/gopnikgame/Installer_dnscypt")
+        config = get_github_config()
+        print(f"🔗 Репозиторий: https://github.com/{config['owner']}/{config['repo']}")
 
 if __name__ == "__main__":
     main()
