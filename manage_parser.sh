@@ -20,19 +20,26 @@ CYAN='\033[0;36m'
 WHITE='\033[0;37m'
 NC='\033[0m' # No Color
 
-# Название бота для контейнера и префикса
-DEFAULT_BOT_NAME="support-bot"
+# Название парсера для контейнера и префикса
+DEFAULT_PARSER_NAME="dnscrypt-parser"
+SCHEDULER_CONTAINER_NAME="dnscrypt-parser-scheduler"
+MANUAL_CONTAINER_NAME="dnscrypt-parser-once"
+
 if [ -n "$INSTANCE_NAME" ]; then
-    BOT_NAME="${DEFAULT_BOT_NAME}_${INSTANCE_NAME}"
+    PARSER_NAME="${DEFAULT_PARSER_NAME}_${INSTANCE_NAME}"
+    SCHEDULER_CONTAINER_NAME="${SCHEDULER_CONTAINER_NAME}_${INSTANCE_NAME}"
+    MANUAL_CONTAINER_NAME="${MANUAL_CONTAINER_NAME}_${INSTANCE_NAME}"
 else
-    BOT_NAME="${DEFAULT_BOT_NAME}"
+    PARSER_NAME="${DEFAULT_PARSER_NAME}"
 fi
 
 # Файлы логов
 LOGS_DIR="$ROOT_DIR/logs"
-mkdir -p "$LOGS_DIR"
-BOT_LOG_FILE="$LOGS_DIR/bot.log"
+OUTPUT_DIR="$ROOT_DIR/output"
+mkdir -p "$LOGS_DIR" "$OUTPUT_DIR"
+PARSER_LOG_FILE="$LOGS_DIR/parser.log"
 ERROR_LOG_FILE="$LOGS_DIR/error.log"
+SCHEDULER_LOG_FILE="$OUTPUT_DIR/scheduler.log"
 
 # Получаем текущую дату и время в формате YYYY-MM-DD HH:MM:SS (UTC)
 CURRENT_TIME=$(date -u +%Y-%m-%d\ %H:%M:%S)
@@ -139,7 +146,7 @@ check_fix_docker() {
     else
         # Проверяем наличие Docker
         if ! command -v docker &> /dev/null; then
-            log "YELLOW" "⚠️ Docker не установлен. Необходимо установить Docker для работы бота."
+            log "YELLOW" "⚠️ Docker не установлен. Необходимо установить Docker для работы парсера."
             
             read -r -p "Установить официальную версию Docker? [Y/n] " response
             response=${response:-Y}
@@ -204,7 +211,7 @@ check_fix_docker() {
                     exit 0
                 fi
             else
-                log "RED" "❌ Docker требуется для работы бота. Установка отменена."
+                log "RED" "❌ Docker требуется для работы парсера. Установка отменена."
                 return 1
             fi
         else
@@ -271,33 +278,25 @@ manage_env_file() {
             cp "$env_example" "$env_file"
             created=true
             log "GREEN" "✅ Создан новый .env файл из примера"
-            
-            # Автоматически обновляем BOT_NAME в .env файле
-            sed -i "s/BOT_NAME=support-bot/BOT_NAME=$BOT_NAME/" "$env_file"
-            log "GREEN" "✅ BOT_NAME обновлен на $BOT_NAME в файле .env"
         else
             log "YELLOW" "⚠️ Файл .env.example не найден, создаем базовый .env"
             cat > "$env_file" << EOL
-# Конфигурация бота
-BOT_TOKEN=your_bot_token_here
-BOT_DEV_ID=your_dev_id_here
-BOT_GROUP_ID=your_group_id_here
-BOT_EMOJI_ID=5417915203100613993
-BOT_NAME=$BOT_NAME
+# GitHub настройки
+GITHUB_TOKEN=your_github_token_here
+GITHUB_OWNER=gopnikgame
+GITHUB_REPO=Installer_dnscypt
+GITHUB_BRANCH=main
 
-REDIS_HOST=redis
-REDIS_PORT=6379
-REDIS_DB=0
+# Настройки Chrome (опционально)
+CHROME_HEADLESS=true
+CHROME_NO_SANDBOX=true
+
+# Настройки Scheduler (опционально)
+SCHEDULER_INTERVAL_DAYS=7
+SCHEDULER_DEBUG=false
 EOL
             created=true
-            log "YELLOW" "⚠️ Создан базовый .env файл. Пожалуйста, обновите токен бота и другие данные!"
-        fi
-    else
-        # Проверяем, соответствует ли BOT_NAME в .env файле текущему имени экземпляра
-        if ! grep -q "BOT_NAME=$BOT_NAME" "$env_file"; then
-            log "YELLOW" "⚠️ Обновляем BOT_NAME в .env файле..."
-            sed -i "s/BOT_NAME=.*/BOT_NAME=$BOT_NAME/" "$env_file"
-            log "GREEN" "✅ BOT_NAME обновлен на $BOT_NAME"
+            log "YELLOW" "⚠️ Создан базовый .env файл. Пожалуйста, обновите GitHub токен!"
         fi
     fi
 
@@ -319,11 +318,11 @@ EOL
         # Проверяем код возврата редактора
         if [ "$editor_result" -ne 0 ]; then
             log "RED" "❌ Редактор вернул код ошибки: $editor_result"
-            log "YELLOW" "⚠️ Файл .env необходимо настроить для работы бота."
+            log "YELLOW" "⚠️ Файл .env необходимо настроить для работы парсера."
             return 1
         fi
     else
-        log "YELLOW" "⚠️ Файл .env необходимо настроить для работы бота."
+        log "YELLOW" "⚠️ Файл .env необходимо настроить для работы парсера."
         return 1
     fi
 
@@ -361,11 +360,125 @@ update_repo() {
     fi
 }
 
+# Функция для запуска scheduler'а
+start_scheduler() {
+    log "BLUE" "⏰ Запуск scheduler'а DNSCrypt..."
+    
+    # Проверяем и исправляем установку Docker
+    check_fix_docker || {
+        log "RED" "❌ Необходимо исправить установку Docker для продолжения."
+        return 1
+    }
+    
+    # Загружаем переменные окружения из файла .env
+    if [ -f ".env" ]; then
+        log "BLUE" "🔑 Загружаем переменные окружения из .env"
+        export $(grep -v '^#' .env | xargs)
+    else
+        log "RED" "❌ Файл .env не найден. Создайте его и настройте переменные окружения."
+        return 1
+    fi
+
+    # Останавливаем существующий scheduler, если он запущен
+    if docker ps | grep -q "$SCHEDULER_CONTAINER_NAME"; then
+        log "YELLOW" "⚠️ Останавливаем существующий scheduler..."
+        docker_compose_cmd down
+    fi
+
+    # Экспортируем переменные для docker-compose
+    export DOCKER_UID DOCKER_GID
+    export CREATED_BY="$CURRENT_USER"
+    export CREATED_AT="$CURRENT_TIME"
+
+    # Запускаем scheduler в фоне
+    log "BLUE" "🚀 Запуск scheduler'а в фоновом режиме..."
+    docker_compose_cmd up -d
+
+    # Ждем немного и проверяем статус
+    sleep 3
+    if docker ps | grep -q "$SCHEDULER_CONTAINER_NAME"; then
+        log "GREEN" "✅ Scheduler запущен успешно"
+        log "BLUE" "📊 Для просмотра логов используйте: docker logs -f $SCHEDULER_CONTAINER_NAME"
+        log "BLUE" "📁 Логи scheduler'а: $SCHEDULER_LOG_FILE"
+    else
+        log "RED" "❌ Ошибка запуска scheduler'а"
+        log "BLUE" "📋 Проверьте логи: docker logs $SCHEDULER_CONTAINER_NAME"
+        return 1
+    fi
+}
+
+# Функция для остановки scheduler'а
+stop_scheduler() {
+    log "BLUE" "⏹️ Остановка scheduler'а DNSCrypt..."
+    
+    if docker ps | grep -q "$SCHEDULER_CONTAINER_NAME"; then
+        docker_compose_cmd down
+        log "GREEN" "✅ Scheduler остановлен"
+    else
+        log "YELLOW" "⚠️ Scheduler не запущен"
+    fi
+}
+
+# Функция для просмотра статуса scheduler'а
+view_scheduler_status() {
+    log "BLUE" "📊 Статус scheduler'а DNSCrypt..."
+    
+    # Проверяем статус контейнера
+    if docker ps | grep -q "$SCHEDULER_CONTAINER_NAME"; then
+        log "GREEN" "✅ Scheduler запущен"
+        
+        # Показываем информацию о контейнере
+        docker ps --filter "name=$SCHEDULER_CONTAINER_NAME" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+        
+        # Показываем информацию из файлов scheduler'а
+        echo ""
+        log "BLUE" "📄 Информация из файлов scheduler'а:"
+        
+        # Время последнего запуска
+        if [ -f "$OUTPUT_DIR/last_run.txt" ]; then
+            last_run=$(cat "$OUTPUT_DIR/last_run.txt" 2>/dev/null || echo "Неизвестно")
+            log "GREEN" "🕐 Время последнего запуска: $last_run"
+        else
+            log "YELLOW" "⚠️ Файл времени последнего запуска не найден"
+        fi
+        
+        # Отчет scheduler'а
+        if [ -f "$OUTPUT_DIR/scheduler_report.txt" ]; then
+            log "GREEN" "📊 Найден отчет scheduler'а:"
+            cat "$OUTPUT_DIR/scheduler_report.txt"
+        else
+            log "YELLOW" "⚠️ Отчет scheduler'а не найден"
+        fi
+        
+        # Предлагаем показать логи
+        echo ""
+        read -r -p "Показать последние логи scheduler'а? [Y/n] " response
+        response=${response:-Y}
+        if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
+            if [ -f "$SCHEDULER_LOG_FILE" ]; then
+                log "BLUE" "📋 Последние 20 строк логов scheduler'а:"
+                tail -20 "$SCHEDULER_LOG_FILE"
+            else
+                log "YELLOW" "⚠️ Файл логов scheduler'а не найден"
+            fi
+        fi
+        
+    elif docker ps -a | grep -q "$SCHEDULER_CONTAINER_NAME"; then
+        log "YELLOW" "⚠️ Scheduler остановлен"
+        docker ps -a --filter "name=$SCHEDULER_CONTAINER_NAME" --format "table {{.Names}}\t{{.Status}}"
+        
+        log "BLUE" "📋 Последние логи остановленного scheduler'а:"
+        docker logs --tail 10 "$SCHEDULER_CONTAINER_NAME" 2>/dev/null || log "RED" "❌ Не удалось получить логи"
+    else
+        log "RED" "❌ Scheduler не найден"
+    fi
+}
+
 # Функция для управления контейнером
 manage_container() {
     local action=$1
 
-    log "BLUE" "🐳 Управление контейнером..."
+    log "BLUE" "🐳 Управление контейнером парсера..."
     
     # Проверяем и исправляем установку Docker
     check_fix_docker || {
@@ -380,28 +493,18 @@ manage_container() {
     # Загружаем переменные окружения из файла .env
     if [ -f ".env" ]; then
         log "BLUE" "🔑 Загружаем переменные окружения из .env"
-        # Без полного пути - работаем с файлом в текущей директории
         export $(grep -v '^#' .env | xargs)
     else
         log "RED" "❌ Файл .env не найден. Создайте его и настройте переменные окружения."
         return 1
     fi
 
-    # Проверяем, установлена ли переменная BOT_NAME
-    if [ -z "${BOT_NAME:-}" ]; then
-        log "RED" "❌ Переменная BOT_NAME не установлена. Установите ее в файле .env"
-        return 1
-    fi
-
-    # Выводим значение переменной BOT_NAME
-    log "BLUE" "🔍 BOT_NAME: $BOT_NAME"
-
     # Экспортируем переменные для docker-compose
     export DOCKER_UID DOCKER_GID
     export CREATED_BY="$CURRENT_USER"
     export CREATED_AT="$CURRENT_TIME"
 
-    # Проверяем наличие docker-compose файла (в текущей директории)
+    # Проверяем наличие docker-compose файла
     if [ ! -f "docker-compose.yml" ]; then
         log "RED" "❌ Файл docker-compose.yml не найден в текущей директории!"
         log "BLUE" "🔍 Содержимое директории:"
@@ -410,52 +513,205 @@ manage_container() {
     fi
 
     case $action in
-        "restart")
-            log "BLUE" "🔄 Перезапуск контейнера..."
-            docker_compose_cmd down --remove-orphans || force_remove_container
+        "restart_scheduler")
+            log "BLUE" "🔄 Перезапуск scheduler'а..."
+            docker_compose_cmd down --remove-orphans
+            docker_compose_cmd build --no-cache
             docker_compose_cmd up -d
             ;;
         "stop")
-            log "BLUE" "⏹️ Остановка контейнера..."
-            docker_compose_cmd down --remove-orphans || force_remove_container
+            log "BLUE" "⏹️ Остановка всех контейнеров..."
+            docker_compose_cmd down --remove-orphans
             ;;
-        "start")
-            log "BLUE" "▶️ Запуск контейнера..."
-            if [ -n "${BOT_NAME:-}" ] && docker ps -a | grep -q "$BOT_NAME"; then
-                force_remove_container
+        "start_scheduler")
+            start_scheduler
+            ;;
+        "run_once")
+            log "BLUE" "🔍 Одноразовый запуск парсера..."
+            # Останавливаем scheduler если он запущен
+            if docker ps | grep -q "$SCHEDULER_CONTAINER_NAME"; then
+                log "YELLOW" "⚠️ Останавливаем scheduler для одноразового запуска..."
+                docker_compose_cmd down
             fi
-            docker_compose_cmd up -d
+            docker_compose_cmd build
+            docker_compose_cmd --profile manual run --rm dnscrypt-parser-once
             ;;
     esac
 
-    if [ "$action" = "start" ] || [ "$action" = "restart" ]; then
-        log "BLUE" "⏳ Ожидание запуска бота..."
-        sleep 5
-
-        if [ -n "${BOT_NAME:-}" ] && ! docker ps | grep -q "$BOT_NAME"; then
-            log "RED" "❌ Ошибка запуска контейнера"
-            docker_compose_cmd logs
-            return 1
-        fi
-
-        log "GREEN" "✅ Контейнер запущен"
-        docker_compose_cmd logs --tail=10
+    if [ "$action" = "start_scheduler" ] || [ "$action" = "restart_scheduler" ]; then
+        log "GREEN" "✅ Scheduler запущен и работает в фоне"
+        log "BLUE" "📁 Проверьте логи в файле: $SCHEDULER_LOG_FILE"
+    elif [ "$action" = "run_once" ]; then
+        log "GREEN" "✅ Парсер завершил работу"
+        log "BLUE" "📁 Проверьте результаты в директории output/"
     fi
 }
 
 # Функция для принудительного удаления контейнера
 force_remove_container() {
-    if docker ps -a | grep -q "$BOT_NAME"; then
-        log "YELLOW" "⚠️ Принудительное удаление контейнера $BOT_NAME..."
-        docker stop "$BOT_NAME" || true
-        docker rm "$BOT_NAME" || true
+    local container_name=$1
+    if docker ps -a | grep -q "$container_name"; then
+        log "YELLOW" "⚠️ Принудительное удаление контейнера $container_name..."
+        docker stop "$container_name" || true
+        docker rm "$container_name" || true
+    fi
+}
+
+# Функция для просмотра результатов парсинга
+view_results() {
+    log "BLUE" "📊 Просмотр результатов парсинга..."
+    
+    if [ -d "$OUTPUT_DIR" ]; then
+        log "GREEN" "📁 Содержимое директории output:"
+        ls -la "$OUTPUT_DIR"
+        
+        # Проверяем наличие отчета парсера
+        if [ -f "$OUTPUT_DIR/update_report.txt" ]; then
+            log "BLUE" "📄 Показать отчет о парсинге? [Y/n]"
+            read -r response
+            response=${response:-Y}
+            if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
+                less "$OUTPUT_DIR/update_report.txt" || cat "$OUTPUT_DIR/update_report.txt"
+            fi
+        fi
+        
+        # Проверяем наличие отчета scheduler'а
+        if [ -f "$OUTPUT_DIR/scheduler_report.txt" ]; then
+            echo ""
+            log "BLUE" "📄 Показать отчет scheduler'а? [Y/n]"
+            read -r response
+            response=${response:-Y}
+            if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
+                cat "$OUTPUT_DIR/scheduler_report.txt"
+            fi
+        fi
+        
+        # Проверяем наличие файлов конфигурации
+        echo ""
+        if [ -f "$OUTPUT_DIR/DNSCrypt_relay.txt" ] || [ -f "$OUTPUT_DIR/DNSCrypt_servers.txt" ]; then
+            log "GREEN" "✅ Найдены обновленные файлы конфигурации"
+            if [ -f "$OUTPUT_DIR/DNSCrypt_relay.txt" ]; then
+                log "GREEN" "📄 DNSCrypt_relay.txt: $(wc -l < "$OUTPUT_DIR/DNSCrypt_relay.txt") строк"
+            fi
+            if [ -f "$OUTPUT_DIR/DNSCrypt_servers.txt" ]; then
+                log "GREEN" "📄 DNSCrypt_servers.txt: $(wc -l < "$OUTPUT_DIR/DNSCrypt_servers.txt") строк"
+            fi
+        else
+            log "YELLOW" "⚠️ Файлы конфигурации не найдены"
+        fi
+        
+        # Информация о времени последнего запуска
+        if [ -f "$OUTPUT_DIR/last_run.txt" ]; then
+            last_run=$(cat "$OUTPUT_DIR/last_run.txt" 2>/dev/null || echo "Неизвестно")
+            log "BLUE" "🕐 Время последнего запуска парсера: $last_run"
+        fi
+    else
+        log "RED" "❌ Директория output не найдена"
+    fi
+}
+
+# Функция для просмотра логов
+view_logs() {
+    log "BLUE" "📋 Выберите тип логов для просмотра:"
+    log "GREEN" "1. 📄 Логи парсера (parser.log)"
+    log "GREEN" "2. ⏰ Логи scheduler'а (scheduler.log)"
+    log "GREEN" "3. ❌ Логи ошибок (error.log)"
+    log "GREEN" "4. 🐳 Логи контейнера scheduler'а"
+    log "GREEN" "5. 📊 Все логи"
+    log "GREEN" "0. 🔙 Назад"
+    
+    read -r -p "Выберите действие (0-5): " choice
+    
+    case "$choice" in
+        1)
+            if [ -f "$PARSER_LOG_FILE" ]; then
+                log "MAGENTA" "📊 Логи парсера:"
+                less "$PARSER_LOG_FILE" || cat "$PARSER_LOG_FILE"
+            else
+                log "RED" "❌ Файл логов парсера не найден: $PARSER_LOG_FILE"
+            fi
+            ;;
+        2)
+            if [ -f "$SCHEDULER_LOG_FILE" ]; then
+                log "MAGENTA" "📊 Логи scheduler'а:"
+                less "$SCHEDULER_LOG_FILE" || cat "$SCHEDULER_LOG_FILE"
+            else
+                log "RED" "❌ Файл логов scheduler'а не найден: $SCHEDULER_LOG_FILE"
+            fi
+            ;;
+        3)
+            if [ -f "$ERROR_LOG_FILE" ]; then
+                log "MAGENTA" "📊 Логи ошибок:"
+                less "$ERROR_LOG_FILE" || cat "$ERROR_LOG_FILE"
+            else
+                log "RED" "❌ Файл логов ошибок не найден: $ERROR_LOG_FILE"
+            fi
+            ;;
+        4)
+            if docker ps | grep -q "$SCHEDULER_CONTAINER_NAME"; then
+                log "MAGENTA" "📊 Логи контейнера scheduler'а:"
+                docker logs -f "$SCHEDULER_CONTAINER_NAME"
+            else
+                log "RED" "❌ Контейнер scheduler'а не запущен"
+            fi
+            ;;
+        5)
+            log "MAGENTA" "📊 Показываем все доступные логи..."
+            echo "==================== ЛОГИ ПАРСЕРА ===================="
+            if [ -f "$PARSER_LOG_FILE" ]; then
+                tail -50 "$PARSER_LOG_FILE"
+            else
+                echo "Файл не найден"
+            fi
+            echo ""
+            echo "==================== ЛОГИ SCHEDULER'А ===================="
+            if [ -f "$SCHEDULER_LOG_FILE" ]; then
+                tail -50 "$SCHEDULER_LOG_FILE"
+            else
+                echo "Файл не найден"
+            fi
+            echo ""
+            echo "==================== ЛОГИ ОШИБОК ===================="
+            if [ -f "$ERROR_LOG_FILE" ]; then
+                tail -50 "$ERROR_LOG_FILE"
+            else
+                echo "Файл не найден"
+            fi
+            ;;
+        0)
+            return 0
+            ;;
+        *)
+            log "RED" "❌ Неверный выбор."
+            ;;
+    esac
+}
+
+# Функция для сброса таймера scheduler'а
+reset_scheduler_timer() {
+    log "BLUE" "🔄 Сброс таймера scheduler'а..."
+    
+    # Удаляем файл времени последнего запуска
+    if [ -f "$OUTPUT_DIR/last_run.txt" ]; then
+        rm "$OUTPUT_DIR/last_run.txt"
+        log "GREEN" "✅ Файл времени последнего запуска удален"
+    else
+        log "YELLOW" "⚠️ Файл времени последнего запуска не найден"
+    fi
+    
+    # Перезапускаем scheduler если он запущен
+    if docker ps | grep -q "$SCHEDULER_CONTAINER_NAME"; then
+        log "BLUE" "🔄 Перезапуск scheduler'а для применения изменений..."
+        docker_compose_cmd restart
+        log "GREEN" "✅ Scheduler перезапущен - парсер запустится немедленно"
+    else
+        log "YELLOW" "⚠️ Scheduler не запущен. При следующем запуске парсер выполнится немедленно."
     fi
 }
 
 # Функция для очистки временных файлов
 cleanup() {
     log "BLUE" "🧹 Очистка временных файлов..."
-    # Используем более безопасный способ
     find /tmp -maxdepth 1 -type d -name "tmp.*" -user "$CURRENT_USER" -exec rm -rf {} \; 2>/dev/null || true
 }
 
@@ -473,24 +729,31 @@ cleanup_docker() {
     fi
 }
 
-# Функция для очистки логов бота
+# Функция для очистки логов
 cleanup_logs() {
     log "BLUE" "🧹 Очистка старых логов..."
     
-    # Проверяем существование директории логов
-    if [ -d "$LOGS_DIR" ]; then
-        # Создаем архив с текущей датой
+    if [ -d "$LOGS_DIR" ] || [ -f "$SCHEDULER_LOG_FILE" ]; then
         local backup_date=$(date +%Y%m%d-%H%M%S)
         local backup_dir="$ROOT_DIR/logs_backup"
         mkdir -p "$backup_dir"
         
-        # Архивируем логи перед удалением
-        if tar -czf "$backup_dir/logs_$backup_date.tar.gz" -C "$ROOT_DIR" logs 2>/dev/null; then
+        # Создаем архив всех логов
+        log "BLUE" "📦 Создание архива логов..."
+        tar -czf "$backup_dir/logs_$backup_date.tar.gz" \
+            $([ -d "$LOGS_DIR" ] && echo "$LOGS_DIR") \
+            $([ -f "$SCHEDULER_LOG_FILE" ] && echo "$SCHEDULER_LOG_FILE") \
+            $([ -f "$OUTPUT_DIR/scheduler_report.txt" ] && echo "$OUTPUT_DIR/scheduler_report.txt") \
+            2>/dev/null
+        
+        if [ $? -eq 0 ]; then
             log "GREEN" "✅ Создан архив логов: logs_$backup_date.tar.gz"
             
-            # Очищаем текущие логи
-            echo "" > "$BOT_LOG_FILE"
-            echo "" > "$ERROR_LOG_FILE"
+            # Очищаем файлы логов
+            [ -f "$PARSER_LOG_FILE" ] && echo "" > "$PARSER_LOG_FILE"
+            [ -f "$ERROR_LOG_FILE" ] && echo "" > "$ERROR_LOG_FILE"
+            [ -f "$SCHEDULER_LOG_FILE" ] && echo "" > "$SCHEDULER_LOG_FILE"
+            
             log "GREEN" "✅ Логи очищены"
             
             # Удаляем старые архивы (старше 30 дней)
@@ -500,30 +763,60 @@ cleanup_logs() {
             log "RED" "❌ Ошибка при создании архива логов"
         fi
     else
-        log "YELLOW" "⚠️ Директория логов не найдена"
+        log "YELLOW" "⚠️ Файлы логов не найдены"
         mkdir -p "$LOGS_DIR"
-        touch "$BOT_LOG_FILE" "$ERROR_LOG_FILE"
+        touch "$PARSER_LOG_FILE" "$ERROR_LOG_FILE" "$SCHEDULER_LOG_FILE"
         log "GREEN" "✅ Созданы пустые файлы логов"
+    fi
+}
+
+# Функция проверки GitHub токена
+check_github_token() {
+    log "BLUE" "🔑 Проверка GitHub токена..."
+    
+    if [ -f ".env" ]; then
+        export $(grep -v '^#' .env | xargs)
+        
+        if [ -n "${GITHUB_TOKEN:-}" ] && [ "$GITHUB_TOKEN" != "your_github_token_here" ]; then
+            log "GREEN" "✅ GitHub токен настроен"
+            
+            # Проверяем валидность токена
+            if curl -s -H "Authorization: token $GITHUB_TOKEN" https://api.github.com/user > /dev/null; then
+                log "GREEN" "✅ GitHub токен валиден"
+            else
+                log "RED" "❌ GitHub токен невалиден"
+            fi
+        else
+            log "YELLOW" "⚠️ GitHub токен не настроен или использует значение по умолчанию"
+            log "YELLOW" "⚠️ Парсер будет работать без автоматической отправки в GitHub"
+        fi
+    else
+        log "RED" "❌ Файл .env не найден"
     fi
 }
 
 # Основное меню
 main_menu() {
     while true; do
-        log "YELLOW" "🤖 Telegram Support Bot"
-        log "YELLOW" "========================"
+        log "YELLOW" "🔍 DNSCrypt Parser with Scheduler"
+        log "YELLOW" "===================================="
         log "GREEN" "1. ⬆️ Обновить из репозитория"
         log "GREEN" "2. 📝 Создать или редактировать .env файл"
-        log "GREEN" "3. 🚀 Собрать и запустить контейнер бота"
-        log "GREEN" "4. ⏹️ Остановить и удалить контейнер бота"
-        log "GREEN" "5. 📊 Показать логи (все)"
-        log "GREEN" "6. ❌ Показать логи ошибок"
-        log "GREEN" "7. 🔄 Перезапустить бота"
-        log "GREEN" "8. 🧹 Очистить старые логи и бэкапы"
-        log "GREEN" "9. 🐳 Проверить и исправить установку Docker"
+        log "GREEN" "3. 🔑 Проверить GitHub токен"
+        log "GREEN" "4. ⏰ Запустить scheduler (автоматические обновления)"
+        log "GREEN" "5. ⏹️ Остановить scheduler"
+        log "GREEN" "6. 📊 Статус scheduler'а"
+        log "GREEN" "7. 🚀 Запустить парсер (одноразово)"
+        log "GREEN" "8. 🔄 Перезапустить scheduler"
+        log "GREEN" "9. ⏰ Сбросить таймер scheduler'а"
+        log "GREEN" "10. 📋 Просмотреть логи"
+        log "GREEN" "11. 📊 Просмотреть результаты парсинга"
+        log "GREEN" "12. 🧹 Очистить старые логи"
+        log "GREEN" "13. 🐳 Очистить Docker"
+        log "GREEN" "14. 🔧 Проверить и исправить установку Docker"
         log "GREEN" "0. 🚪 Выйти"
 
-        read -r -p "Выберите действие (0-9): " choice
+        read -r -p "Выберите действие (0-14): " choice
 
         case "$choice" in
             1)
@@ -533,40 +826,39 @@ main_menu() {
                 manage_env_file
                 ;;
             3)
-                manage_container "start"
+                check_github_token
                 ;;
             4)
-                manage_container "stop"
-                force_remove_container
-                cleanup_docker
+                manage_container "start_scheduler"
                 ;;
             5)
-                # Показать логи (все)
-                log "MAGENTA" "📊 Показываем все логи бота..."
-                if [ -f "$BOT_LOG_FILE" ]; then
-                    less "$BOT_LOG_FILE" || cat "$BOT_LOG_FILE"
-                else
-                    log "RED" "❌ Файл логов не найден: $BOT_LOG_FILE"
-                fi
+                stop_scheduler
                 ;;
             6)
-                # Показать логи ошибок
-                log "RED" "❌ Показываем логи ошибок бота..."
-                if [ -f "$ERROR_LOG_FILE" ]; then
-                    less "$ERROR_LOG_FILE" || cat "$ERROR_LOG_FILE"
-                else
-                    log "RED" "❌ Файл логов ошибок не найден: $ERROR_LOG_FILE"
-                fi
+                view_scheduler_status
                 ;;
             7)
-                manage_container "restart"
+                manage_container "run_once"
                 ;;
             8)
-                # Реализация очистки логов и бэкапов
-                cleanup_logs
+                manage_container "restart_scheduler"
                 ;;
             9)
-                # Проверка и исправление установки Docker
+                reset_scheduler_timer
+                ;;
+            10)
+                view_logs
+                ;;
+            11)
+                view_results
+                ;;
+            12)
+                cleanup_logs
+                ;;
+            13)
+                cleanup_docker
+                ;;
+            14)
                 check_fix_docker
                 ;;
             0)
@@ -574,9 +866,14 @@ main_menu() {
                 break
                 ;;
             *)
-                log "RED" "❌ Неверный выбор. Пожалуйста, выберите действие от 0 до 9."
+                log "RED" "❌ Неверный выбор. Пожалуйста, выберите действие от 0 до 14."
                 ;;
         esac
+        
+        # Добавляем паузу после выполнения действия
+        echo ""
+        read -r -p "Нажмите Enter для продолжения..."
+        echo ""
     done
 }
 

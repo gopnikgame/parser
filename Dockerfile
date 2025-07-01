@@ -33,13 +33,14 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Копируем скрипт
+# Копируем скрипты
 COPY parser.py .
+COPY scheduler.py .
 
 # Создаем пользователя для запуска (безопасность)
 RUN useradd -m -u 1000 parser && \
     chown -R parser:parser /app
 USER parser
 
-# Команда по умолчанию
-CMD ["python", "parser.py"]
+# Команда по умолчанию - запуск scheduler'а
+CMD ["python", "scheduler.py"]

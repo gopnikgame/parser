@@ -1,7 +1,7 @@
 services:
   dnscrypt-parser:
     build: .
-    container_name: dnscrypt-parser
+    container_name: dnscrypt-parser-scheduler
     environment:
       - DISPLAY=:99
     env_file:
@@ -11,6 +11,26 @@ services:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
     network_mode: host
     restart: unless-stopped
+    command: >
+      sh -c "
+        Xvfb :99 -screen 0 1920x1080x24 &
+        python scheduler.py
+      "
+
+  # Сервис для одноразового запуска парсера (без scheduler'а)
+  dnscrypt-parser-once:
+    build: .
+    container_name: dnscrypt-parser-once
+    environment:
+      - DISPLAY=:99
+    env_file:
+      - .env
+    volumes:
+      - ./output:/app/output
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    network_mode: host
+    profiles:
+      - manual
     command: >
       sh -c "
         Xvfb :99 -screen 0 1920x1080x24 &
