@@ -38,9 +38,9 @@ DNSCrypt Parser — это полностью автоматизированно
 ## 🚀 Быстрый старт
 
 ### 🎯 Автоматическая установка (рекомендуется)# Скачайте и запустите launcher
-wget -O launcher_parser.sh https://raw.githubusercontent.com/gopnikgame/parser/main/launcher_parser.sh
-chmod +x launcher_parser.sh
-sudo ./launcher_parser.sh
+```bash
+wget -O launcher_parser.sh https://raw.githubusercontent.com/gopnikgame/parser/main/launcher_parser.sh && chmod +x launcher_parser.sh && sudo ./launcher_parser.sh
+```
 ### 🔧 Ручная установка# Клонируйте репозиторий
 git clone https://github.com/gopnikgame/parser.git
 cd parser
