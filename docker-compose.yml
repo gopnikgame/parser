@@ -4,7 +4,6 @@ services:
     container_name: dnscrypt-parser-scheduler
     environment:
       - DISPLAY=:99
-      - PYTHONUNBUFFERED=1
     env_file:
       - .env
     volumes:
@@ -24,7 +23,6 @@ services:
     container_name: dnscrypt-parser-once
     environment:
       - DISPLAY=:99
-      - PYTHONUNBUFFERED=1 
     env_file:
       - .env
     volumes:
