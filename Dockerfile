@@ -19,6 +19,9 @@ RUN apt-get update && apt-get install -y \
     lsb-release \
     && rm -rf /var/lib/apt/lists/*
 
+# Добавить в секцию с установкой зависимостей
+RUN mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
+
 # Добавляем ключ Google Chrome через новый метод (без использования apt-key)
 RUN wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | \
     gpg --dearmor -o /etc/apt/keyrings/google-chrome.gpg && \

@@ -141,10 +141,53 @@ def wait_for_page_load(driver, timeout=30):
         print("⚠️ Таймаут загрузки страницы")
         return False
 
+def wait_for_table_load(driver, timeout=30):
+    """Ожидание загрузки таблицы с данными"""
+    try:
+        print("⏳ Ожидание загрузки таблицы...")
+        
+        # Ждем загрузки основной таблицы
+        WebDriverWait(driver, timeout).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, ".v-data-table, table"))
+        )
+        
+        # Ждем загрузки строк данных
+        WebDriverWait(driver, timeout).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, "tbody tr, .v-data-table__row"))
+        )
+        
+        # Небольшая пауза для полной загрузки
+        time.sleep(3)
+        
+        # Подсчитываем количество строк
+        rows = driver.find_elements(By.CSS_SELECTOR, "tbody tr, .v-data-table__row")
+        print(f"✅ Таблица загружена, найдено строк: {len(rows)}")
+        
+        return True
+        
+    except TimeoutException:
+        print("⚠️ Таймаут загрузки таблицы")
+        
+        # Пробуем найти любые элементы с данными
+        try:
+            all_elements = driver.find_elements(By.XPATH, "//*[contains(text(), 'dnscrypt') or contains(text(), 'anon-') or contains(text(), 'quad9')]")
+            print(f"🔍 Найдено элементов с DNS-данными: {len(all_elements)}")
+            for elem in all_elements[:5]:  # Показываем первые 5
+                print(f"   📄 Элемент: {elem.text[:50]}...")
+        except:
+            pass
+            
+        return False
+
 def expand_all_rows(driver):
     """Попытка показать все строки в таблице"""
     try:
         print("🔧 Попытка показать все строки...")
+        
+        # Ждем загрузки таблицы
+        if not wait_for_table_load(driver):
+            print("⚠️ Таблица не загрузилась, продолжаем без расширения")
+            return False
         
         # Прокручиваем вниз
         driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
@@ -154,24 +197,36 @@ def expand_all_rows(driver):
         pagination_selectors = [
             "//div[contains(text(), 'Rows per page')]//following::div[contains(@class, 'v-select')]",
             "//div[contains(@class, 'v-data-table__pagination')]//div[contains(@class, 'v-select')]",
-            "//*[contains(text(), '50')]//parent::div[contains(@class, 'v-select')]",
-            "//div[@role='combobox']"
+            "//div[contains(@class, 'v-select')]//div[contains(text(), '50')]",
+            "//div[@role='combobox']",
+            "//div[contains(@class, 'v-input--selection-controls')]",
+            ".v-data-footer__select .v-select",
+            ".v-data-table-footer .v-select"
         ]
         
         for selector in pagination_selectors:
             try:
-                dropdown = WebDriverWait(driver, 3).until(
-                    EC.element_to_be_clickable((By.XPATH, selector))
-                )
+                if selector.startswith("//"):
+                    dropdown = WebDriverWait(driver, 3).until(
+                        EC.element_to_be_clickable((By.XPATH, selector))
+                    )
+                else:
+                    dropdown = WebDriverWait(driver, 3).until(
+                        EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
+                    )
+                
                 print(f"✅ Найден dropdown: {selector}")
-                dropdown.click()
+                driver.execute_script("arguments[0].click();", dropdown)
                 time.sleep(2)
                 
-                # Ищем опцию "All"
+                # Ищем опцию "All" или большое число
                 all_options = [
                     "//div[contains(text(), 'All')]",
                     "//*[text()='All']",
-                    "//div[contains(@class, 'v-list-item')]//div[contains(text(), 'All')]"
+                    "//div[contains(@class, 'v-list-item')]//div[contains(text(), 'All')]",
+                    "//div[contains(text(), '-1')]",  # Иногда "All" представлено как -1
+                    "//div[contains(text(), '1000')]", # Или большое число
+                    "//div[contains(text(), '500')]"
                 ]
                 
                 for option_selector in all_options:
@@ -179,10 +234,15 @@ def expand_all_rows(driver):
                         all_option = WebDriverWait(driver, 2).until(
                             EC.element_to_be_clickable((By.XPATH, option_selector))
                         )
-                        all_option.click()
-                        print("✅ Выбрана опция 'All'")
+                        driver.execute_script("arguments[0].click();", all_option)
+                        print(f"✅ Выбрана опция 'All' или максимум записей")
                         time.sleep(5)  # Ждем загрузки всех данных
+                        
+                        # Проверяем, увеличилось ли количество строк
+                        rows_after = driver.find_elements(By.CSS_SELECTOR, "tbody tr, .v-data-table__row")
+                        print(f"📊 Строк после расширения: {len(rows_after)}")
                         return True
+                        
                     except TimeoutException:
                         continue
                 
@@ -226,50 +286,114 @@ def close_any_overlays(driver):
     except Exception as e:
         print(f"⚠️ Ошибка закрытия overlay: {e}")
 
+def debug_page_content(driver):
+    """Отладочная функция для анализа содержимого страницы"""
+    try:
+        print("🔍 Отладка содержимого страницы...")
+        
+        # Проверяем заголовок страницы
+        title = driver.title
+        print(f"📄 Заголовок страницы: {title}")
+        
+        # Ищем все таблицы
+        tables = driver.find_elements(By.TAG_NAME, "table")
+        print(f"📊 Найдено таблиц: {len(tables)}")
+        
+        # Ищем элементы Vuetify
+        vuetify_elements = driver.find_elements(By.CSS_SELECTOR, "[class*='v-data-table']")
+        print(f"🎨 Найдено Vuetify таблиц: {len(vuetify_elements)}")
+        
+        # Ищем любые элементы с текстом 'dnscrypt'
+        dnscrypt_elements = driver.find_elements(By.XPATH, "//*[contains(text(), 'dnscrypt')]")
+        print(f"🔍 Элементов с 'dnscrypt': {len(dnscrypt_elements)}")
+        
+        # Показываем первые несколько найденных элементов
+        for i, elem in enumerate(dnscrypt_elements[:3]):
+            try:
+                print(f"   {i+1}. {elem.tag_name}: {elem.text[:100]}...")
+            except:
+                print(f"   {i+1}. Элемент недоступен")
+        
+        # Сохраняем снимок экрана для отладки (если возможно)
+        try:
+            driver.save_screenshot("/tmp/debug_page.png")
+            print("📸 Снимок экрана сохранен: /tmp/debug_page.png")
+        except:
+            pass
+            
+    except Exception as e:
+        print(f"❌ Ошибка отладки: {e}")
+
 def find_server_element(driver, server_name):
-    """Улучшенный поиск элемента сервера"""
+    """Улучшенный поиск элемента сервера с множественными стратегиями"""
     try:
         # Закрываем любые overlay перед поиском
         close_any_overlays(driver)
         
-        # Множественные стратегии поиска
+        # Ждем загрузки таблицы
+        try:
+            WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((By.TAG_NAME, "table"))
+            )
+        except TimeoutException:
+            print("⚠️ Таблица не загрузилась")
+        
+        # Множественные стратегии поиска с более широким охватом
         search_strategies = [
-            # Точное совпадение в span
+            # Поиск в таблице данных Vuetify
+            f"//div[contains(@class, 'v-data-table')]//span[text()='{server_name}']",
+            f"//div[contains(@class, 'v-data-table')]//td[text()='{server_name}']",
+            f"//div[contains(@class, 'v-data-table')]//span[contains(text(), '{server_name}')]",
+            f"//div[contains(@class, 'v-data-table')]//td[contains(text(), '{server_name}')]",
+            
+            # Поиск в строках таблицы
+            f"//tr[contains(@class, 'v-data-table__row')]//span[text()='{server_name}']",
+            f"//tr[contains(@class, 'v-data-table__row')]//td[text()='{server_name}']",
+            f"//tbody//span[text()='{server_name}']",
+            f"//tbody//td[text()='{server_name}']",
+            
+            # Общий поиск по тексту
             f"//span[text()='{server_name}']",
-            f"//span[contains(text(), '{server_name}')]",
-            
-            # Поиск в таблице
             f"//td[text()='{server_name}']",
+            f"//span[contains(text(), '{server_name}')]",
             f"//td[contains(text(), '{server_name}')]",
-            
-            # Поиск в ссылках
-            f"//a[text()='{server_name}']", 
-            f"//a[contains(text(), '{server_name}')]",
             
             # Поиск в любых элементах
             f"//*[text()='{server_name}']",
             f"//*[contains(text(), '{server_name}')]",
             
-            # Поиск в строках таблицы
-            f"//tr[.//span[contains(text(), '{server_name}')]]//span[contains(text(), '{server_name}')]",
-            f"//table//span[contains(text(), '{server_name}')]"
+            # Поиск с частичным совпадением (для случаев когда имя сервера является частью большего текста)
+            f"//span[contains(normalize-space(text()), '{server_name}')]",
+            f"//td[contains(normalize-space(text()), '{server_name}')]"
         ]
         
         for i, strategy in enumerate(search_strategies):
             try:
+                print(f"🔍 Стратегия поиска {i+1}: {strategy}")
                 elements = driver.find_elements(By.XPATH, strategy)
                 
-                for element in elements:
-                    if element.is_displayed() and element.is_enabled():
-                        return element
+                print(f"   Найдено элементов: {len(elements)}")
+                
+                for j, element in enumerate(elements):
+                    try:
+                        if element.is_displayed() and element.text.strip():
+                            print(f"   ✅ Элемент {j+1}: видимый, текст: '{element.text.strip()}'")
+                            return element
+                        else:
+                            print(f"   ⚠️ Элемент {j+1}: не видимый или пустой")
+                    except Exception as e:
+                        print(f"   ❌ Ошибка элемента {j+1}: {e}")
+                        continue
                         
             except Exception as e:
+                print(f"   ❌ Ошибка стратегии {i+1}: {e}")
                 continue
         
+        print(f"❌ Сервер '{server_name}' не найден ни одной стратегией")
         return None
         
     except Exception as e:
-        print(f"❌ Ошибка поиска сервера: {e}")
+        print(f"❌ Критическая ошибка поиска сервера '{server_name}': {e}")
         return None
 
 def click_server_and_get_dialog(driver, server_element, server_name):
@@ -862,7 +986,7 @@ def main():
             print("⚠️ Продолжаем несмотря на проблемы с загрузкой...")
         
         time.sleep(5)
-        
+        debug_page_content(driver) 
         # Показываем все строки
         expand_all_rows(driver)
         
