@@ -23,9 +23,25 @@ from dotenv import load_dotenv
 # Загружаем переменные окружения из .env файла
 load_dotenv()
 
+def get_performance_config():
+    """Получение настроек производительности из .env"""
+    return {
+        'search_timeout': float(os.getenv('SEARCH_TIMEOUT', '3')),
+        'element_wait_timeout': float(os.getenv('ELEMENT_WAIT_TIMEOUT', '2')),
+        'page_load_timeout': float(os.getenv('PAGE_LOAD_TIMEOUT', '15')),
+        'dialog_wait_timeout': float(os.getenv('DIALOG_WAIT_TIMEOUT', '1')),
+        'strategy_timeout': float(os.getenv('STRATEGY_TIMEOUT', '1')),
+        'server_delay': float(os.getenv('SERVER_DELAY', '0.2')),
+        'debug_search': os.getenv('DEBUG_SEARCH', 'false').lower() == 'true',
+        'use_all_strategies': os.getenv('USE_ALL_STRATEGIES', 'true').lower() == 'true',
+        'fast_mode': os.getenv('FAST_MODE', 'true').lower() == 'true'
+    }
+
 def get_default_chrome_options():
-    """Базовые опции Chrome согласно документации Selenium для Docker"""
+    """Оптимизированные опции Chrome для максимальной скорости"""
     options = webdriver.ChromeOptions()
+    
+    # Базовые опции безопасности
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
@@ -35,9 +51,18 @@ def get_default_chrome_options():
     options.add_argument("--disable-web-security")
     options.add_argument("--allow-running-insecure-content")
     
-    # Headless режим (по умолчанию включен в Docker)
+    # Опции для ускорения
+    options.add_argument("--disable-images")  # Не загружаем изображения
+    options.add_argument("--disable-plugins")
+    options.add_argument("--disable-background-timer-throttling")
+    options.add_argument("--disable-backgrounding-occluded-windows")
+    options.add_argument("--disable-renderer-backgrounding")
+    options.add_argument("--disable-features=TranslateUI")
+    options.add_argument("--disable-ipc-flooding-protection")
+    
+    # Headless режим
     if os.getenv('CHROME_HEADLESS', 'true').lower() == 'true':
-        options.add_argument("--headless")
+        options.add_argument("--headless=new")
     
     return options
 
@@ -46,7 +71,7 @@ def kill_existing_chrome():
     try:
         subprocess.run(['pkill', '-f', 'chrome'], check=False)
         subprocess.run(['pkill', '-f', 'chromium'], check=False)
-        time.sleep(2)
+        time.sleep(1)  # Уменьшенная пауза
         print("✅ Существующие процессы Chrome завершены")
     except Exception as e:
         print(f"⚠️ Не удалось завершить процессы Chrome: {e}")
@@ -129,8 +154,12 @@ def setup_driver():
         print(f"❌ Ошибка запуска Chrome в Docker: {str(e)}")
         return None
 
-def wait_for_page_load(driver, timeout=30):
-    """Ожидание полной загрузки страницы"""
+def wait_for_page_load(driver, timeout=None):
+    """Ожидание полной загрузки страницы с настраиваемым таймаутом"""
+    if timeout is None:
+        config = get_performance_config()
+        timeout = config['page_load_timeout']
+        
     try:
         WebDriverWait(driver, timeout).until(
             lambda d: d.execute_script("return document.readyState") == "complete"
@@ -141,363 +170,261 @@ def wait_for_page_load(driver, timeout=30):
         print("⚠️ Таймаут загрузки страницы")
         return False
 
-def wait_for_table_load(driver, timeout=30):
-    """Ожидание загрузки таблицы с данными"""
-    try:
-        print("⏳ Ожидание загрузки таблицы...")
-        
-        # Ждем загрузки основной таблицы
-        WebDriverWait(driver, timeout).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, ".v-data-table, table"))
-        )
-        
-        # Ждем загрузки строк данных
-        WebDriverWait(driver, timeout).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, "tbody tr, .v-data-table__row"))
-        )
-        
-        # Небольшая пауза для полной загрузки
-        time.sleep(3)
-        
-        # Подсчитываем количество строк
-        rows = driver.find_elements(By.CSS_SELECTOR, "tbody tr, .v-data-table__row")
-        print(f"✅ Таблица загружена, найдено строк: {len(rows)}")
-        
-        return True
-        
-    except TimeoutException:
-        print("⚠️ Таймаут загрузки таблицы")
-        
-        # Пробуем найти любые элементы с данными
-        try:
-            all_elements = driver.find_elements(By.XPATH, "//*[contains(text(), 'dnscrypt') or contains(text(), 'anon-') or contains(text(), 'quad9')]")
-            print(f"🔍 Найдено элементов с DNS-данными: {len(all_elements)}")
-            for elem in all_elements[:5]:  # Показываем первые 5
-                print(f"   📄 Элемент: {elem.text[:50]}...")
-        except:
-            pass
-            
-        return False
-
-def expand_all_rows(driver):
-    """Попытка показать все строки в таблице"""
+def expand_all_rows_optimized(driver):
+    """Оптимизированное показание всех строк в таблице на основе записи Chrome"""
+    config = get_performance_config()
+    
     try:
         print("🔧 Попытка показать все строки...")
         
-        # Ждем загрузки таблицы
-        if not wait_for_table_load(driver):
-            print("⚠️ Таблица не загрузилась, продолжаем без расширения")
+        # Ждем появления таблицы
+        try:
+            WebDriverWait(driver, config['search_timeout']).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "table tbody"))
+            )
+        except TimeoutException:
+            print("⚠️ Таблица не найдена")
             return False
         
-        # Прокручиваем вниз
+        # Прокручиваем к нижней части страницы для загрузки элементов пагинации
         driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-        time.sleep(2)
+        time.sleep(0.5)
         
-        # Ищем элементы пагинации разными способами
-        pagination_selectors = [
-            "//div[contains(text(), 'Rows per page')]//following::div[contains(@class, 'v-select')]",
-            "//div[contains(@class, 'v-data-table__pagination')]//div[contains(@class, 'v-select')]",
-            "//div[contains(@class, 'v-select')]//div[contains(text(), '50')]",
-            "//div[@role='combobox']",
-            "//div[contains(@class, 'v-input--selection-controls')]",
-            ".v-data-footer__select .v-select",
-            ".v-data-table-footer .v-select"
+        # Основываясь на записи Chrome, ищем конкретный селектор для dropdown
+        dropdown_selectors = [
+            "div.v-datatable__actions__select i",  # Из записи Chrome
+            "div.v-data-table__pagination i",
+            "i[aria-label*='arrow_drop_down']",
+            "//i[contains(@class, 'mdi-menu-down')]",
+            "//div[contains(@class, 'v-datatable__actions__select')]//i",
+            "//div[contains(@class, 'v-data-table__pagination')]//i"
         ]
         
-        for selector in pagination_selectors:
+        dropdown_found = False
+        
+        for selector in dropdown_selectors:
             try:
                 if selector.startswith("//"):
-                    dropdown = WebDriverWait(driver, 3).until(
+                    dropdown = WebDriverWait(driver, config['element_wait_timeout']).until(
                         EC.element_to_be_clickable((By.XPATH, selector))
                     )
                 else:
-                    dropdown = WebDriverWait(driver, 3).until(
+                    dropdown = WebDriverWait(driver, config['element_wait_timeout']).until(
                         EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
                     )
                 
                 print(f"✅ Найден dropdown: {selector}")
+                
+                # Кликаем по dropdown
                 driver.execute_script("arguments[0].click();", dropdown)
-                time.sleep(2)
-                
-                # Ищем опцию "All" или большое число
-                all_options = [
-                    "//div[contains(text(), 'All')]",
-                    "//*[text()='All']",
-                    "//div[contains(@class, 'v-list-item')]//div[contains(text(), 'All')]",
-                    "//div[contains(text(), '-1')]",  # Иногда "All" представлено как -1
-                    "//div[contains(text(), '1000')]", # Или большое число
-                    "//div[contains(text(), '500')]"
-                ]
-                
-                for option_selector in all_options:
-                    try:
-                        all_option = WebDriverWait(driver, 2).until(
-                            EC.element_to_be_clickable((By.XPATH, option_selector))
-                        )
-                        driver.execute_script("arguments[0].click();", all_option)
-                        print(f"✅ Выбрана опция 'All' или максимум записей")
-                        time.sleep(5)  # Ждем загрузки всех данных
-                        
-                        # Проверяем, увеличилось ли количество строк
-                        rows_after = driver.find_elements(By.CSS_SELECTOR, "tbody tr, .v-data-table__row")
-                        print(f"📊 Строк после расширения: {len(rows_after)}")
-                        return True
-                        
-                    except TimeoutException:
-                        continue
+                time.sleep(0.5)
+                dropdown_found = True
+                break
                 
             except TimeoutException:
                 continue
         
-        print("⚠️ Не удалось найти элементы пагинации")
+        if not dropdown_found:
+            print("⚠️ Dropdown для пагинации не найден")
+            return False
+        
+        # Ищем опцию "All" основываясь на записи Chrome
+        all_option_selectors = [
+            "div.v-menu__content--auto div:nth-of-type(4) div > div",  # Из записи Chrome
+            "//div[contains(@class, 'v-menu__content')]//div[text()='All']",
+            "//div[contains(@class, 'v-list-item')]//div[text()='All']",
+            "//*[text()='All']",
+            "//a[contains(@class, 'v-list__tile')]//div[text()='All']"
+        ]
+        
+        for selector in all_option_selectors:
+            try:
+                if selector.startswith("//"):
+                    all_option = WebDriverWait(driver, 1).until(
+                        EC.element_to_be_clickable((By.XPATH, selector))
+                    )
+                else:
+                    all_option = WebDriverWait(driver, 1).until(
+                        EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
+                    )
+                
+                driver.execute_script("arguments[0].click();", all_option)
+                print("✅ Выбрана опция 'All'")
+                
+                # Ждем загрузки всех данных
+                time.sleep(3)
+                
+                # Проверяем количество строк после расширения
+                rows = driver.find_elements(By.CSS_SELECTOR, "tbody tr")
+                print(f"📊 Строк после расширения: {len(rows)}")
+                return True
+                
+            except TimeoutException:
+                continue
+        
+        print("⚠️ Опция 'All' не найдена")
         return False
         
     except Exception as e:
         print(f"⚠️ Ошибка при попытке показать все строки: {e}")
         return False
 
-def close_any_overlays(driver):
-    """Закрытие любых overlay/модальных окон"""
+def close_any_overlays_fast(driver):
+    """Быстрое закрытие overlay с помощью ESC"""
     try:
-        # Пробуем найти и закрыть overlay
-        overlays = [
-            "//div[contains(@class, 'v-overlay')]",
-            "//div[contains(@class, 'v-dialog')]",
-            "//div[contains(@class, 'modal')]"
-        ]
-        
-        for overlay_selector in overlays:
-            try:
-                overlays_elements = driver.find_elements(By.XPATH, overlay_selector)
-                for overlay in overlays_elements:
-                    if overlay.is_displayed():
-                        # Пробуем ESC
-                        driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
-                        time.sleep(1)
-                        
-                        # Если overlay все еще есть, кликаем вне его
-                        if overlay.is_displayed():
-                            driver.execute_script("arguments[0].click();", overlay)
-                            time.sleep(1)
-                        break
-            except:
-                continue
-                
-    except Exception as e:
-        print(f"⚠️ Ошибка закрытия overlay: {e}")
+        driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
+        time.sleep(0.1)  # Минимальная пауза
+    except:
+        pass
 
-def debug_page_content(driver):
-    """Отладочная функция для анализа содержимого страницы"""
+def find_server_element_optimized(driver, server_name):
+    """Оптимизированный поиск элемента сервера с приоритетными селекторами"""
+    config = get_performance_config()
+    
     try:
-        print("🔍 Отладка содержимого страницы...")
+        close_any_overlays_fast(driver)
         
-        # Проверяем заголовок страницы
-        title = driver.title
-        print(f"📄 Заголовок страницы: {title}")
-        
-        # Ищем все таблицы
-        tables = driver.find_elements(By.TAG_NAME, "table")
-        print(f"📊 Найдено таблиц: {len(tables)}")
-        
-        # Ищем элементы Vuetify
-        vuetify_elements = driver.find_elements(By.CSS_SELECTOR, "[class*='v-data-table']")
-        print(f"🎨 Найдено Vuetify таблиц: {len(vuetify_elements)}")
-        
-        # Ищем любые элементы с текстом 'dnscrypt'
-        dnscrypt_elements = driver.find_elements(By.XPATH, "//*[contains(text(), 'dnscrypt')]")
-        print(f"🔍 Элементов с 'dnscrypt': {len(dnscrypt_elements)}")
-        
-        # Показываем первые несколько найденных элементов
-        for i, elem in enumerate(dnscrypt_elements[:3]):
-            try:
-                print(f"   {i+1}. {elem.tag_name}: {elem.text[:100]}...")
-            except:
-                print(f"   {i+1}. Элемент недоступен")
-        
-        # Сохраняем снимок экрана для отладки (если возможно)
-        try:
-            driver.save_screenshot("/tmp/debug_page.png")
-            print("📸 Снимок экрана сохранен: /tmp/debug_page.png")
-        except:
-            pass
+        # Приоритетные стратегии поиска на основе записи Chrome
+        # tr:nth-of-type(45) span > span - структура из записи
+        priority_strategies = [
+            # Самые быстрые и специфичные селекторы на основе записи Chrome
+            f"//tbody//tr//td[1]//span//span[text()='{server_name}']",  # Структура из записи
+            f"//tbody//tr//td[1]//span[text()='{server_name}']",
+            f"//table//tbody//tr//td[1][text()='{server_name}' or .//text()='{server_name}']",
             
-    except Exception as e:
-        print(f"❌ Ошибка отладки: {e}")
-
-def find_server_element(driver, server_name):
-    """Улучшенный поиск элемента сервера с множественными стратегиями"""
-    try:
-        # Закрываем любые overlay перед поиском
-        close_any_overlays(driver)
-        
-        # Ждем загрузки таблицы
-        try:
-            WebDriverWait(driver, 10).until(
-                EC.presence_of_element_located((By.TAG_NAME, "table"))
-            )
-        except TimeoutException:
-            print("⚠️ Таблица не загрузилась")
-        
-        # Множественные стратегии поиска с более широким охватом
-        search_strategies = [
-            # Поиск в таблице данных Vuetify
-            f"//div[contains(@class, 'v-data-table')]//span[text()='{server_name}']",
-            f"//div[contains(@class, 'v-data-table')]//td[text()='{server_name}']",
-            f"//div[contains(@class, 'v-data-table')]//span[contains(text(), '{server_name}')]",
-            f"//div[contains(@class, 'v-data-table')]//td[contains(text(), '{server_name}')]",
-            
-            # Поиск в строках таблицы
-            f"//tr[contains(@class, 'v-data-table__row')]//span[text()='{server_name}']",
-            f"//tr[contains(@class, 'v-data-table__row')]//td[text()='{server_name}']",
-            f"//tbody//span[text()='{server_name}']",
+            # Более общие селекторы
             f"//tbody//td[text()='{server_name}']",
+            f"//tbody//span[text()='{server_name}']",
+            f"//tr//td[1][contains(text(), '{server_name}')]",
             
-            # Общий поиск по тексту
-            f"//span[text()='{server_name}']",
+            # Селекторы для Vuetify таблиц
+            f"//div[contains(@class, 'v-data-table')]//tbody//td[text()='{server_name}']",
+            f"//div[contains(@class, 'v-data-table')]//span[text()='{server_name}']",
+            
+            # Частичное совпадение
+            f"//tbody//td[contains(text(), '{server_name}')]",
+            f"//tbody//span[contains(text(), '{server_name}')]",
+            
+            # Общие селекторы (медленнее)
             f"//td[text()='{server_name}']",
-            f"//span[contains(text(), '{server_name}')]",
-            f"//td[contains(text(), '{server_name}')]",
-            
-            # Поиск в любых элементах
+            f"//span[text()='{server_name}']",
             f"//*[text()='{server_name}']",
-            f"//*[contains(text(), '{server_name}')]",
             
-            # Поиск с частичным совпадением (для случаев когда имя сервера является частью большего текста)
-            f"//span[contains(normalize-space(text()), '{server_name}')]",
-            f"//td[contains(normalize-space(text()), '{server_name}')]"
+            # Нормализованный поиск
+            f"//td[normalize-space(text())='{server_name}']",
+            f"//span[normalize-space(text())='{server_name}']",
+            f"//*[contains(normalize-space(text()), '{server_name}')]"
         ]
         
-        for i, strategy in enumerate(search_strategies):
+        # Используем все стратегии согласно требованиям
+        strategies_to_use = priority_strategies if config['use_all_strategies'] else priority_strategies[:8]
+        
+        for i, strategy in enumerate(strategies_to_use):
             try:
-                print(f"🔍 Стратегия поиска {i+1}: {strategy}")
-                elements = driver.find_elements(By.XPATH, strategy)
+                if config['debug_search']:
+                    print(f"🔍 Стратегия {i+1}: {strategy}")
                 
-                print(f"   Найдено элементов: {len(elements)}")
+                # Быстрый поиск с коротким таймаутом
+                elements = WebDriverWait(driver, config['strategy_timeout']).until(
+                    EC.presence_of_all_elements_located((By.XPATH, strategy))
+                )
                 
-                for j, element in enumerate(elements):
+                if config['debug_search']:
+                    print(f"   Найдено элементов: {len(elements)}")
+                
+                # Быстрая проверка первого подходящего элемента
+                for element in elements:
                     try:
-                        if element.is_displayed() and element.text.strip():
-                            print(f"   ✅ Элемент {j+1}: видимый, текст: '{element.text.strip()}'")
-                            return element
-                        else:
-                            print(f"   ⚠️ Элемент {j+1}: не видимый или пустой")
-                    except Exception as e:
-                        print(f"   ❌ Ошибка элемента {j+1}: {e}")
+                        if element.is_displayed():
+                            element_text = element.text.strip()
+                            if element_text == server_name or server_name in element_text:
+                                if config['debug_search']:
+                                    print(f"   ✅ Найден элемент: '{element_text}'")
+                                return element
+                    except Exception:
                         continue
                         
+            except TimeoutException:
+                if config['debug_search']:
+                    print(f"   ⏱️ Таймаут стратегии {i+1}")
+                continue
             except Exception as e:
-                print(f"   ❌ Ошибка стратегии {i+1}: {e}")
+                if config['debug_search']:
+                    print(f"   ❌ Ошибка стратегии {i+1}: {e}")
                 continue
         
-        print(f"❌ Сервер '{server_name}' не найден ни одной стратегией")
+        if config['debug_search']:
+            print(f"❌ Сервер '{server_name}' не найден")
         return None
         
     except Exception as e:
-        print(f"❌ Критическая ошибка поиска сервера '{server_name}': {e}")
+        print(f"❌ Критическая ошибка поиска '{server_name}': {e}")
         return None
 
-def click_server_and_get_dialog(driver, server_element, server_name):
-    """Клик по серверу и получение диалога"""
+def click_server_and_get_dialog_optimized(driver, server_element, server_name):
+    """Оптимизированный клик и получение диалога"""
+    config = get_performance_config()
+    
     try:
-        # Закрываем overlay перед кликом
-        close_any_overlays(driver)
+        close_any_overlays_fast(driver)
         
-        # Прокручиваем к элементу
+        # Быстрая прокрутка к элементу
         driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", server_element)
-        time.sleep(2)
+        time.sleep(0.1)
         
-        # Пробуем разные способы клика
-        click_methods = [
-            lambda: server_element.click(),
-            lambda: ActionChains(driver).move_to_element(server_element).click().perform(),
-            lambda: driver.execute_script("arguments[0].click();", server_element),
-            lambda: ActionChains(driver).move_to_element(server_element).pause(1).click().perform()
-        ]
+        # Самый надежный способ клика
+        driver.execute_script("arguments[0].click();", server_element)
         
-        for i, click_method in enumerate(click_methods):
-            try:
-                # Убеждаемся что нет overlay
-                close_any_overlays(driver)
+        # Быстрое ожидание диалога
+        try:
+            # Ждем появления любого диалога
+            dialog = WebDriverWait(driver, config['dialog_wait_timeout']).until(
+                EC.any_of(
+                    EC.presence_of_element_located((By.XPATH, "//div[contains(@class, 'v-dialog') and @role='dialog']")),
+                    EC.presence_of_element_located((By.XPATH, "//div[contains(@class, 'v-dialog')]")),
+                    EC.presence_of_element_located((By.XPATH, "//div[contains(@class, 'v-card')]")),
+                    EC.presence_of_element_located((By.XPATH, "//div[@role='dialog']"))
+                )
+            )
+            
+            if dialog.is_displayed() and dialog.text.strip():
+                return dialog
                 
-                click_method()
-                time.sleep(3)
-                
-                # Ищем диалог с расширенными селекторами
-                dialog_selectors = [
-                    "//div[contains(@class, 'v-dialog') and @role='dialog']",
-                    "//div[contains(@class, 'v-dialog')]",
-                    "//div[contains(@class, 'v-card')]", 
-                    "//div[contains(@class, 'modal')]",
-                    "//*[contains(@class, 'dialog')]",
-                    "//div[@role='dialog']"
-                ]
-                
-                for selector in dialog_selectors:
-                    try:
-                        dialogs = driver.find_elements(By.XPATH, selector)
-                        for dialog in dialogs:
-                            if dialog.is_displayed() and dialog.text.strip():
-                                return dialog
-                    except:
-                        continue
-                        
-            except Exception as e:
-                continue
+        except TimeoutException:
+            if config['debug_search']:
+                print(f"⏱️ Таймаут диалога для {server_name}")
         
         return None
         
     except Exception as e:
-        print(f"❌ Ошибка клика: {e}")
+        if config['debug_search']:
+            print(f"❌ Ошибка клика {server_name}: {e}")
         return None
 
-def extract_dialog_info(driver, dialog):
-    """Извлечение информации из диалога"""
+def extract_dialog_info_optimized(driver, dialog):
+    """Быстрое извлечение информации из диалога"""
+    config = get_performance_config()
+    
     try:
-        time.sleep(2)  # Ждем полной загрузки
+        # Минимальное ожидание для загрузки содержимого
+        time.sleep(0.1)
         
-        # Пробуем получить текст разными способами
         dialog_text = ""
         
-        # Способ 1: обычный text
-        if dialog.text.strip():
-            dialog_text = dialog.text
-        
-        # Способ 2: innerHTML через JavaScript
-        if not dialog_text.strip():
-            dialog_text = driver.execute_script("return arguments[0].innerHTML;", dialog)
-        
-        # Способ 3: textContent через JavaScript
-        if not dialog_text.strip():
-            dialog_text = driver.execute_script("return arguments[0].textContent;", dialog)
-        
-        # Способ 4: ищем конкретные элементы внутри диалога
-        if not dialog_text.strip():
-            try:
-                inner_elements = dialog.find_elements(By.XPATH, ".//*[text()]")
-                texts = [elem.text for elem in inner_elements if elem.text.strip()]
-                dialog_text = "\n".join(texts)
-            except:
-                pass
-        
-        # Закрываем диалог
+        # Быстрые способы получения текста
         try:
-            # ESC
-            driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
-            time.sleep(1)
+            dialog_text = dialog.text or driver.execute_script("return arguments[0].textContent;", dialog)
         except:
-            # Кнопка закрытия
-            try:
-                close_buttons = dialog.find_elements(By.XPATH, ".//button | .//i[@class*='close'] | .//*[@aria-label='close']")
-                if close_buttons:
-                    close_buttons[0].click()
-                    time.sleep(1)
-            except:
-                pass
+            pass
+        
+        # Быстрое закрытие диалога с помощью ESC (как в записи Chrome)
+        driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
         
         return dialog_text if dialog_text.strip() else None
         
     except Exception as e:
-        print(f"❌ Ошибка извлечения диалога: {e}")
+        if config['debug_search']:
+            print(f"❌ Ошибка извлечения диалога: {e}")
         return None
 
 def parse_server_info(dialog_text, server_name):
@@ -637,27 +564,31 @@ def update_config_file(filename, servers_data, is_relay_file=False):
         print(f"❌ Ошибка обновления файла {filename}: {e}")
         return 0
 
-def process_servers(driver, servers, file_type):
-    """Обработка списка серверов"""
-    print(f"\n🔍 Обработка {len(servers)} серверов ({file_type})...")
+def process_servers_optimized(driver, servers, file_type):
+    """Высокооптимизированная обработка списка серверов"""
+    config = get_performance_config()
+    
+    print(f"\n🚀 Обработка {len(servers)} серверов ({file_type}) - ОПТИМИЗИРОВАННЫЙ РЕЖИМ")
+    print(f"⚙️ Настройки: поиск={config['search_timeout']}с, диалог={config['dialog_wait_timeout']}с, пауза={config['server_delay']}с")
     
     servers_data = {}
     successful_count = 0
+    start_time = time.time()
     
     for i, server in enumerate(servers, 1):
+        server_start_time = time.time()
         print(f"\n[{i}/{len(servers)}] {server['name']}", end=" ")
         
-        # Ищем элемент сервера
-        server_element = find_server_element(driver, server['name'])
+        # Используем оптимизированные функции
+        server_element = find_server_element_optimized(driver, server['name'])
         if server_element:
             print("✓", end=" ")
             
-            # Кликаем и получаем диалог
-            dialog = click_server_and_get_dialog(driver, server_element, server['name'])
+            dialog = click_server_and_get_dialog_optimized(driver, server_element, server['name'])
             if dialog:
                 print("🔍", end=" ")
                 
-                dialog_text = extract_dialog_info(driver, dialog)
+                dialog_text = extract_dialog_info_optimized(driver, dialog)
                 if dialog_text:
                     info = parse_server_info(dialog_text, server['name'])
                     
@@ -667,28 +598,40 @@ def process_servers(driver, servers, file_type):
                     if info['ip'] and info['protocol'] == expected_protocol:
                         servers_data[server['name']] = info
                         successful_count += 1
-                        print(f"✅ -> {info['ip']}")
+                        server_time = time.time() - server_start_time
+                        print(f"✅ -> {info['ip']} ({server_time:.1f}с)")
                     else:
-                        print(f"⚠️ Неподходящий протокол: {info['protocol']}")
+                        print(f"⚠️ Протокол: {info['protocol']}")
                 else:
                     print("❌ Пустой диалог")
             else:
-                print("❌ Диалог не открылся")
+                print("❌ Нет диалога")
         else:
             print("❌ Не найден")
         
-        # Пауза между запросами
-        time.sleep(1)
+        # Настраиваемая пауза между запросами
+        if config['server_delay'] > 0:
+            time.sleep(config['server_delay'])
         
-        # Прогресс каждые 10 серверов
-        if i % 10 == 0:
+        # Прогресс с оценкой времени каждые 5 серверов (чаще для лучшего мониторинга)
+        if i % 5 == 0:
+            elapsed = time.time() - start_time
+            avg_time_per_server = elapsed / i
+            estimated_total = avg_time_per_server * len(servers)
+            remaining = estimated_total - elapsed
+            
             print(f"\n📊 Прогресс {file_type}: {i}/{len(servers)} ({successful_count} успешных)")
+            print(f"⏱️ Время: {elapsed:.1f}с из ~{estimated_total:.1f}с (осталось ~{remaining:.1f}с)")
+            print(f"📈 Скорость: {avg_time_per_server:.1f}с/сервер")
+    
+    total_time = time.time() - start_time
+    print(f"\n✅ Обработка {file_type} завершена за {total_time:.1f}с")
+    print(f"📊 Успешность: {successful_count}/{len(servers)} ({successful_count/len(servers)*100:.1f}%)")
+    print(f"⚡ Средняя скорость: {total_time/len(servers):.1f}с/сервер")
     
     return servers_data, successful_count
 
-# =====================================================================
-# ОБНОВЛЕННЫЕ ФУНКЦИИ ДЛЯ РАБОТЫ С GITHUB API (используют .env)
-# =====================================================================
+# [Остальные функции GitHub API остаются без изменений...]
 
 def get_github_config():
     """Настройки GitHub репозитория из переменных окружения"""
@@ -882,6 +825,7 @@ def push_to_github(total_updated):
         print(f"🔗 Ссылка: https://github.com/{config['owner']}/{config['repo']}/tree/{config['branch']}/lib")
         
         # Добавляем информацию в отчет
+        output_dir = '/app/output' if os.path.exists('/app') else './output'
         report_file = os.path.join(output_dir, "update_report.txt")
         if os.path.exists(report_file):
             with open(report_file, "a", encoding="utf-8") as f:
@@ -896,6 +840,7 @@ def push_to_github(total_updated):
         print(f"\n❌ НЕ УДАЛОСЬ ОТПРАВИТЬ ФАЙЛЫ В GITHUB")
         
         # Добавляем информацию об ошибке в отчет
+        output_dir = '/app/output' if os.path.exists('/app') else './output'
         report_file = os.path.join(output_dir, "update_report.txt")
         if os.path.exists(report_file):
             with open(report_file, "a", encoding="utf-8") as f:
@@ -933,19 +878,22 @@ def setup_github_token_instructions():
 # =====================================================================
 
 def main():
-    """Главная функция"""
+    """Главная функция с максимальной оптимизацией"""
+    config = get_performance_config()
+    
     print("🚀 Запуск автоматизированного парсера DNSCrypt серверов (Docker)")
-    print("=" * 60)
+    print(f"⚡ РЕЖИМ ОПТИМИЗАЦИИ: поиск={config['search_timeout']}с, диалог={config['dialog_wait_timeout']}с")
+    print("=" * 80)
     
     # Создаем директорию output
     output_dir = '/app/output' if os.path.exists('/app') else './output'
     os.makedirs(output_dir, exist_ok=True)
     
     # URLs файлов на GitHub
-    config = get_github_config()
+    config_github = get_github_config()
     github_urls = {
-        'DNSCrypt_relay.txt': f'https://github.com/{config["owner"]}/{config["repo"]}/blob/{config["branch"]}/lib/DNSCrypt_relay.txt',
-        'DNSCrypt_servers.txt': f'https://github.com/{config["owner"]}/{config["repo"]}/blob/{config["branch"]}/lib/DNSCrypt_servers.txt'
+        'DNSCrypt_relay.txt': f'https://github.com/{config_github["owner"]}/{config_github["repo"]}/blob/{config_github["branch"]}/lib/DNSCrypt_relay.txt',
+        'DNSCrypt_servers.txt': f'https://github.com/{config_github["owner"]}/{config_github["repo"]}/blob/{config_github["branch"]}/lib/DNSCrypt_servers.txt'
     }
     
     # Скачиваем файлы во временную папку
@@ -979,54 +927,56 @@ def main():
         return
     
     try:
+        total_start_time = time.time()
+        
         print("\n🔄 Переход на страницу dnscrypt.info...")
         driver.get("https://dnscrypt.info/public-servers")
         
         if not wait_for_page_load(driver):
             print("⚠️ Продолжаем несмотря на проблемы с загрузкой...")
         
-        time.sleep(5)
-        debug_page_content(driver) 
-        # Показываем все строки
-        expand_all_rows(driver)
+        time.sleep(2)  # Уменьшенная пауза
         
-        # Обрабатываем релеи
+        # Показываем все строки с оптимизацией
+        expand_all_rows_optimized(driver)
+        
+        # Обрабатываем серверы с максимальной оптимизацией
         relay_data = {}
         relay_successful = 0
         if relay_servers:
-            relay_data, relay_successful = process_servers(driver, relay_servers, 'relay')
+            relay_data, relay_successful = process_servers_optimized(driver, relay_servers, 'relay')
         
-        # Обрабатываем обычные серверы
         server_data = {}
         server_successful = 0
         if dnscrypt_servers:
-            server_data, server_successful = process_servers(driver, dnscrypt_servers, 'server')
+            server_data, server_successful = process_servers_optimized(driver, dnscrypt_servers, 'server')
         
-        # Статистика
+        # Статистика с временем
+        total_time = time.time() - total_start_time
         total_processed = len(relay_servers) + len(dnscrypt_servers)
         total_successful = relay_successful + server_successful
         
-        print(f"\n{'='*60}")
+        print(f"\n{'='*80}")
         print("📊 ИТОГОВАЯ СТАТИСТИКА")
-        print('='*60)
+        print('='*80)
         print(f"Всего серверов обработано: {total_processed}")
         print(f"  - Релеев: {len(relay_servers)} (успешно: {relay_successful})")
         print(f"  - Серверов: {len(dnscrypt_servers)} (успешно: {server_successful})")
-        print(f"Общий успех: {total_successful}/{total_processed}")
+        print(f"Общий успех: {total_successful}/{total_processed} ({total_successful/total_processed*100:.1f}%)")
+        print(f"⏱️ Общее время: {total_time:.1f}с")
+        print(f"⚡ Средняя скорость: {total_time/total_processed:.1f}с/сервер")
         
         # Создаем итоговые файлы с обновленными данными
         total_updated = 0
         
         if relay_data:
             print(f"\n📝 Создание обновленного файла релеев...")
-            # Копируем временный файл в финальный
             os.rename('temp_DNSCrypt_relay.txt', 'DNSCrypt_relay.txt')
             updated_count = update_config_file('DNSCrypt_relay.txt', relay_data, is_relay_file=True)
             total_updated += updated_count
         
         if server_data:
             print(f"\n📝 Создание обновленного файла серверов...")
-            # Копируем временный файл в финальный
             os.rename('temp_DNSCrypt_servers.txt', 'DNSCrypt_servers.txt')
             updated_count = update_config_file('DNSCrypt_servers.txt', server_data, is_relay_file=False)
             total_updated += updated_count
@@ -1035,8 +985,10 @@ def main():
         if total_updated > 0:
             report_file = os.path.join(output_dir, "update_report.txt")
             with open(report_file, "w", encoding="utf-8") as f:
-                f.write("# Отчет об обновлении DNSCrypt серверов (Docker)\n")
-                f.write(f"# Дата: {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+                f.write("# Отчет об обновлении DNSCrypt серверов (Docker) - ОПТИМИЗИРОВАННЫЙ\n")
+                f.write(f"# Дата: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"# Общее время: {total_time:.1f}с\n")
+                f.write(f"# Скорость: {total_time/total_processed:.1f}с/сервер\n\n")
                 f.write(f"Всего серверов обработано: {total_processed}\n")
                 f.write(f"Успешно обновлено: {total_updated}\n\n")
                 
@@ -1057,14 +1009,11 @@ def main():
             print(f"   - DNSCrypt_relay.txt ({relay_successful} серверов)")
             print(f"   - DNSCrypt_servers.txt ({server_successful} серверов)")
             print(f"   - update_report.txt (отчет)")
-            print(f"💾 Резервные копии оригиналов:")
-            print(f"   - DNSCrypt_relay.txt.original_backup")
-            print(f"   - DNSCrypt_servers.txt.original_backup")
             
             # 🆕 ОТПРАВКА В GITHUB
-            print(f"\n{'='*60}")
+            print(f"\n{'='*80}")
             print("🚀 ОТПРАВКА ОБНОВЛЕНИЙ В GITHUB")
-            print('='*60)
+            print('='*80)
             
             # Проверяем наличие токена
             github_token = os.getenv('GITHUB_TOKEN')
@@ -1072,9 +1021,7 @@ def main():
                 print("⚠️ GitHub token не найден в переменных окружения")
                 setup_github_token_instructions()
                 print("⚠️ Отправка в GitHub пропущена")
-                print("💡 Для автоматической отправки настройте .env файл с GITHUB_TOKEN")
             else:
-                # Автоматическая отправка
                 print("🔑 GitHub token найден, начинаем отправку...")
                 push_to_github(total_updated)
         else:
@@ -1094,7 +1041,7 @@ def main():
         
         kill_existing_chrome()
         
-        # Очистка ТОЛЬКО оставшихся временных файлов
+        # Очистка временных файлов
         print("🧹 Очистка временных файлов...")
         for temp_file in temp_files:
             try:
@@ -1105,8 +1052,8 @@ def main():
                 print(f"⚠️ Не удалось удалить {temp_file}: {e}")
         
         print("\n✅ ПАРСИНГ ЗАВЕРШЕН!")
-        config = get_github_config()
-        print(f"🔗 Репозиторий: https://github.com/{config['owner']}/{config['repo']}")
+        config_github = get_github_config()
+        print(f"🔗 Репозиторий: https://github.com/{config_github['owner']}/{config_github['repo']}")
 
 if __name__ == "__main__":
     main()
