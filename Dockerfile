@@ -1,25 +1,36 @@
 FROM python:3.11-slim
 
-# Устанавливаем системные зависимости
+# Устанавливаем переменные среды для неинтерактивной установки
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+ENV PIP_NO_CACHE_DIR=1
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# Обновляем систему и устанавливаем базовые зависимости
 RUN apt-get update && apt-get install -y \
+    apt-utils \
+    ca-certificates \
     wget \
     gnupg \
     unzip \
     curl \
     xvfb \
     jq \
+    lsb-release \
     && rm -rf /var/lib/apt/lists/*
 
-# Добавляем Google Chrome repository
-RUN wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | apt-key add - \
-    && echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google-chrome.list
+# Добавляем ключ Google Chrome через новый метод (без использования apt-key)
+RUN wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | \
+    gpg --dearmor -o /etc/apt/keyrings/google-chrome.gpg && \
+    echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" > \
+    /etc/apt/sources.list.d/google-chrome.list
 
 # Устанавливаем Google Chrome
 RUN apt-get update && apt-get install -y \
     google-chrome-stable \
     && rm -rf /var/lib/apt/lists/*
 
-# Скачиваем ChromeDriver используя новый Chrome for Testing API
+# Устанавливаем ChromeDriver используя новый Chrome for Testing API
 RUN CHROME_VERSION=$(google-chrome --version | awk '{print $3}' | cut -d. -f1-3) && \
     echo "🔍 Установленная версия Chrome: $CHROME_VERSION" && \
     # Пробуем найти совместимую версию ChromeDriver через новый API
@@ -48,17 +59,22 @@ RUN CHROME_VERSION=$(google-chrome --version | awk '{print $3}' | cut -d. -f1-3)
 # Создаем рабочую директорию
 WORKDIR /app
 
-# Копируем requirements.txt и устанавливаем зависимости
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Копируем скрипты
-COPY parser.py .
-COPY scheduler.py .
-
-# Создаем пользователя для запуска (безопасность)
+# Создаем непривилегированного пользователя заранее
 RUN useradd -m -u 1000 parser && \
     chown -R parser:parser /app
+
+# Копируем requirements.txt и устанавливаем зависимости как root
+COPY requirements.txt .
+
+# Обновляем pip и устанавливаем зависимости
+RUN python -m pip install --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
+# Копируем скрипты и устанавливаем права доступа
+COPY parser.py scheduler.py ./
+RUN chown -R parser:parser /app
+
+# Переключаемся на непривилегированного пользователя
 USER parser
 
 # Команда по умолчанию - запуск scheduler'а
