@@ -23,22 +23,8 @@ from dotenv import load_dotenv
 # Загружаем переменные окружения из .env файла
 load_dotenv()
 
-def get_performance_config():
-    """Получение настроек производительности из .env"""
-    return {
-        'search_timeout': float(os.getenv('SEARCH_TIMEOUT', '3')),
-        'element_wait_timeout': float(os.getenv('ELEMENT_WAIT_TIMEOUT', '2')),
-        'page_load_timeout': float(os.getenv('PAGE_LOAD_TIMEOUT', '30')),  # Увеличен таймаут
-        'dialog_wait_timeout': float(os.getenv('DIALOG_WAIT_TIMEOUT', '3')),  # Увеличен таймаут
-        'strategy_timeout': float(os.getenv('STRATEGY_TIMEOUT', '3')),  # Увеличен таймаут
-        'server_delay': float(os.getenv('SERVER_DELAY', '1')),  # Увеличена пауза
-        'debug_search': os.getenv('DEBUG_SEARCH', 'false').lower() == 'true',
-        'use_all_strategies': os.getenv('USE_ALL_STRATEGIES', 'true').lower() == 'true',
-        'fast_mode': os.getenv('FAST_MODE', 'false').lower() == 'true'  # Отключен быстрый режим
-    }
-
 def get_default_chrome_options():
-    """Базовые опции Chrome согласно рабочей версии"""
+    """Базовые опции Chrome согласно документации Selenium"""
     options = webdriver.ChromeOptions()
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage") 
@@ -56,7 +42,7 @@ def kill_existing_chrome():
     try:
         subprocess.run(['pkill', '-f', 'chrome'], check=False)
         subprocess.run(['pkill', '-f', 'chromium'], check=False)
-        time.sleep(2)  # Восстановлена исходная пауза
+        time.sleep(2)
         print("✅ Существующие процессы Chrome завершены")
     except Exception as e:
         print(f"⚠️ Не удалось завершить процессы Chrome: {e}")
@@ -124,13 +110,11 @@ def parse_config_file(filename):
         return []
 
 def setup_driver():
-    """Настройка драйвера Chrome на основе рабочей версии"""
+    """Простая настройка драйвера Chrome"""
     kill_existing_chrome()
     
     try:
         options = get_default_chrome_options()
-        
-        # В Docker среде ChromeDriver должен быть в PATH
         driver = webdriver.Chrome(options=options)
         print("✅ Chrome успешно запущен")
         return driver
@@ -139,12 +123,8 @@ def setup_driver():
         print(f"❌ Ошибка запуска Chrome: {str(e)}")
         return None
 
-def wait_for_page_load(driver, timeout=None):
+def wait_for_page_load(driver, timeout=30):
     """Ожидание полной загрузки страницы"""
-    if timeout is None:
-        config = get_performance_config()
-        timeout = config['page_load_timeout']
-        
     try:
         WebDriverWait(driver, timeout).until(
             lambda d: d.execute_script("return document.readyState") == "complete"
@@ -156,7 +136,7 @@ def wait_for_page_load(driver, timeout=None):
         return False
 
 def expand_all_rows(driver):
-    """Попытка показать все строки в таблице (из рабочей версии)"""
+    """Попытка показать все строки в таблице"""
     try:
         print("🔧 Попытка показать все строки...")
         
@@ -211,7 +191,7 @@ def expand_all_rows(driver):
         return False
 
 def close_any_overlays(driver):
-    """Закрытие любых overlay/модальных окон (из рабочей версии)"""
+    """Закрытие любых overlay/модальных окон"""
     try:
         # Пробуем найти и закрыть overlay
         overlays = [
@@ -241,7 +221,7 @@ def close_any_overlays(driver):
         print(f"⚠️ Ошибка закрытия overlay: {e}")
 
 def find_server_element(driver, server_name):
-    """Улучшенный поиск элемента сервера (из рабочей версии)"""
+    """Улучшенный поиск элемента сервера"""
     try:
         # Закрываем любые overlay перед поиском
         close_any_overlays(driver)
@@ -287,7 +267,7 @@ def find_server_element(driver, server_name):
         return None
 
 def click_server_and_get_dialog(driver, server_element, server_name):
-    """Клик по серверу и получение диалога (из рабочей версии)"""
+    """Клик по серверу и получение диалога"""
     try:
         # Закрываем overlay перед кликом
         close_any_overlays(driver)
@@ -310,7 +290,7 @@ def click_server_and_get_dialog(driver, server_element, server_name):
                 close_any_overlays(driver)
                 
                 click_method()
-                time.sleep(3)  # Увеличенное время ожидания
+                time.sleep(3)
                 
                 # Ищем диалог с расширенными селекторами
                 dialog_selectors = [
@@ -341,7 +321,7 @@ def click_server_and_get_dialog(driver, server_element, server_name):
         return None
 
 def extract_dialog_info(driver, dialog):
-    """Извлечение информации из диалога (из рабочей версии)"""
+    """Извлечение информации из диалога"""
     try:
         time.sleep(2)  # Ждем полной загрузки
         
@@ -531,11 +511,8 @@ def update_config_file(filename, servers_data, is_relay_file=False):
         return 0
 
 def process_servers(driver, servers, file_type):
-    """Обработка списка серверов (из рабочей версии)"""
-    config = get_performance_config()
-    
+    """Обработка списка серверов"""
     print(f"\n🔍 Обработка {len(servers)} серверов ({file_type})...")
-    print(f"⚙️ Настройки: пауза={config['server_delay']}с, диалог={config['dialog_wait_timeout']}с")
     
     servers_data = {}
     successful_count = 0
@@ -574,7 +551,7 @@ def process_servers(driver, servers, file_type):
             print("❌ Не найден")
         
         # Пауза между запросами
-        time.sleep(config['server_delay'])
+        time.sleep(1)
         
         # Прогресс каждые 10 серверов
         if i % 10 == 0:
@@ -582,7 +559,7 @@ def process_servers(driver, servers, file_type):
     
     return servers_data, successful_count
 
-# GitHub функции остаются без изменений
+# GitHub функции
 def get_github_config():
     """Настройки GitHub репозитория из переменных окружения"""
     return {
@@ -738,7 +715,7 @@ def push_to_github(total_updated):
                     f"- Обновлено серверов: {total_updated}\n" \
                     f"- Дата обновления: {timestamp}\n" \
                     f"- Источник: dnscrypt.info/public-servers\n" \
-                    f"- Версия: Стабильная\n\n" \
+                    f"- Версия: Стабильная (исправленная)\n\n" \
                     f"Автоматически сгенерировано парсером"
     
     # Создаем коммит с несколькими файлами
@@ -755,12 +732,9 @@ def push_to_github(total_updated):
         return False
 
 def main():
-    """Главная функция с исправлениями"""
-    config = get_performance_config()
-    
+    """Главная функция"""
     print("🚀 Запуск автоматизированного парсера DNSCrypt серверов")
-    print(f"⚙️ Настройки: пауза={config['server_delay']}с, диалог={config['dialog_wait_timeout']}с")
-    print("=" * 80)
+    print("=" * 60)
     
     # Создаем директорию output
     output_dir = '/app/output' if os.path.exists('/app') else './output'
@@ -812,7 +786,7 @@ def main():
         if not wait_for_page_load(driver):
             print("⚠️ Продолжаем несмотря на проблемы с загрузкой...")
         
-        time.sleep(5)  # Восстанавливаем исходную паузу
+        time.sleep(5)
         
         # Показываем все строки
         expand_all_rows(driver)
@@ -834,13 +808,15 @@ def main():
         total_processed = len(relay_servers) + len(dnscrypt_servers)
         total_successful = relay_successful + server_successful
         
-        print(f"\n{'='*80}")
+        print(f"\n{'='*60}")
         print("📊 ИТОГОВАЯ СТАТИСТИКА")
-        print('='*80)
+        print('='*60)
         print(f"Всего серверов обработано: {total_processed}")
         print(f"  - Релеев: {len(relay_servers)} (успешно: {relay_successful})")
         print(f"  - Серверов: {len(dnscrypt_servers)} (успешно: {server_successful})")
-        print(f"Общий успех: {total_successful}/{total_processed} ({total_successful/total_processed*100:.1f}%)")
+        print(f"Общий успех: {total_successful}/{total_processed}")
+        if total_processed > 0:
+            print(f"Процент успеха: {total_successful/total_processed*100:.1f}%")
         print(f"⏱️ Общее время: {total_time:.1f}с")
         
         # Создаем итоговые файлы с обновленными данными
@@ -887,9 +863,9 @@ def main():
             print(f"   - update_report.txt (отчет)")
             
             # Отправка в GitHub
-            print(f"\n{'='*80}")
+            print(f"\n{'='*60}")
             print("🚀 ОТПРАВКА ОБНОВЛЕНИЙ В GITHUB")
-            print('='*80)
+            print('='*60)
             
             # Проверяем наличие токена
             github_token = os.getenv('GITHUB_TOKEN')
