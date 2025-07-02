@@ -188,82 +188,146 @@ def expand_all_rows_optimized(driver):
         
         # Прокручиваем к нижней части страницы для загрузки элементов пагинации
         driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-        time.sleep(0.5)
+        time.sleep(1)  # Увеличиваем время ожидания для загрузки элементов
         
-        # Основываясь на записи Chrome, ищем конкретный селектор для dropdown
+        # Ищем элементы пагинации с более широким набором селекторов
+        pagination_selectors = [
+            "div.v-data-table-footer",
+            "div.v-data-table__pagination",
+            "div[class*='pagination']",
+            "div[class*='data-table']",
+            "div.v-pagination",
+            "*[class*='pagination']"
+        ]
+        
+        pagination_container = None
+        for selector in pagination_selectors:
+            try:
+                pagination_container = WebDriverWait(driver, 2).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, selector))
+                )
+                print(f"✅ Найден контейнер пагинации: {selector}")
+                break
+            except TimeoutException:
+                continue
+        
+        if not pagination_container:
+            print("⚠️ Контейнер пагинации не найден")
+            return False
+        
+        # Ищем dropdown для выбора количества строк
         dropdown_selectors = [
-            "div.v-datatable__actions__select i",  # Из записи Chrome
-            "div.v-data-table__pagination i",
-            "i[aria-label*='arrow_drop_down']",
-            "//i[contains(@class, 'mdi-menu-down')]",
-            "//div[contains(@class, 'v-datatable__actions__select')]//i",
-            "//div[contains(@class, 'v-data-table__pagination')]//i"
+            ".v-select",
+            ".v-input__control",
+            ".v-text-field",
+            "div[role='button']",
+            "button[aria-haspopup='listbox']",
+            "*[class*='select']"
         ]
         
         dropdown_found = False
         
         for selector in dropdown_selectors:
             try:
-                if selector.startswith("//"):
-                    dropdown = WebDriverWait(driver, config['element_wait_timeout']).until(
-                        EC.element_to_be_clickable((By.XPATH, selector))
-                    )
-                else:
-                    dropdown = WebDriverWait(driver, config['element_wait_timeout']).until(
-                        EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
-                    )
+                dropdowns = pagination_container.find_elements(By.CSS_SELECTOR, selector)
+                for dropdown in dropdowns:
+                    if dropdown.is_displayed():
+                        # Проверяем, содержит ли dropdown цифры (признак пагинации)
+                        dropdown_text = dropdown.text.strip()
+                        if any(char.isdigit() for char in dropdown_text) or dropdown_text in ['10', '25', '50', '100']:
+                            print(f"✅ Найден dropdown пагинации: {dropdown_text}")
+                            driver.execute_script("arguments[0].click();", dropdown)
+                            time.sleep(1)
+                            dropdown_found = True
+                            break
                 
-                print(f"✅ Найден dropdown: {selector}")
+                if dropdown_found:
+                    break
+                    
+            except Exception:
+                continue
+        
+        if not dropdown_found:
+            print("⚠️ Dropdown для пагинации не найден, попробуем альтернативный метод...")
+            # Альтернативный поиск по всей странице
+            try:
+                all_selects = driver.find_elements(By.CSS_SELECTOR, "div[role='button'], .v-select, .v-input")
+                for select in all_selects:
+                    if select.is_displayed() and any(char.isdigit() for char in select.text):
+                        print(f"✅ Найден альтернативный dropdown: {select.text}")
+                        driver.execute_script("arguments[0].click();", select)
+                        time.sleep(1)
+                        dropdown_found = True
+                        break
+                        
+                if not dropdown_found:
+                    print("❌ Не удалось найти dropdown для пагинации")
+                    return False
+                    
+            except Exception as e:
+                print(f"❌ Ошибка поиска альтернативного dropdown: {e}")
+                return False
+        
+        # Ищем опцию "All" или максимальное значение
+        all_option_selectors = [
+            "//div[contains(@class, 'v-menu')]//div[text()='All']",
+            "//div[contains(@class, 'v-list')]//div[text()='All']",
+            "//div[contains(@class, 'v-select-list')]//div[text()='All']",
+            "//*[text()='All']",
+            "//div[text()='100']",  # Если нет "All", ищем максимальное значение
+            "//div[text()='200']",
+            "//div[text()='500']",
+            "//div[text()='-1']"  # Иногда "All" представлено как -1
+        ]
+        
+        option_found = False
+        for selector in all_option_selectors:
+            try:
+                all_option = WebDriverWait(driver, 2).until(
+                    EC.element_to_be_clickable((By.XPATH, selector))
+                )
                 
-                # Кликаем по dropdown
-                driver.execute_script("arguments[0].click();", dropdown)
-                time.sleep(0.5)
-                dropdown_found = True
+                option_text = all_option.text.strip()
+                print(f"✅ Найдена опция: '{option_text}'")
+                
+                driver.execute_script("arguments[0].click();", all_option)
+                print(f"✅ Выбрана опция '{option_text}'")
+                
+                # Ждем загрузки всех данных
+                time.sleep(5)  # Увеличиваем время ожидания для загрузки всех данных
+                
+                option_found = True
                 break
                 
             except TimeoutException:
                 continue
-        
-        if not dropdown_found:
-            print("⚠️ Dropdown для пагинации не найден")
-            return False
-        
-        # Ищем опцию "All" основываясь на записи Chrome
-        all_option_selectors = [
-            "div.v-menu__content--auto div:nth-of-type(4) div > div",  # Из записи Chrome
-            "//div[contains(@class, 'v-menu__content')]//div[text()='All']",
-            "//div[contains(@class, 'v-list-item')]//div[text()='All']",
-            "//*[text()='All']",
-            "//a[contains(@class, 'v-list__tile')]//div[text()='All']"
-        ]
-        
-        for selector in all_option_selectors:
-            try:
-                if selector.startswith("//"):
-                    all_option = WebDriverWait(driver, 1).until(
-                        EC.element_to_be_clickable((By.XPATH, selector))
-                    )
-                else:
-                    all_option = WebDriverWait(driver, 1).until(
-                        EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
-                    )
-                
-                driver.execute_script("arguments[0].click();", all_option)
-                print("✅ Выбрана опция 'All'")
-                
-                # Ждем загрузки всех данных
-                time.sleep(3)
-                
-                # Проверяем количество строк после расширения
-                rows = driver.find_elements(By.CSS_SELECTOR, "tbody tr")
-                print(f"📊 Строк после расширения: {len(rows)}")
-                return True
-                
-            except TimeoutException:
+            except Exception as e:
+                print(f"⚠️ Ошибка при клике на опцию: {e}")
                 continue
         
-        print("⚠️ Опция 'All' не найдена")
-        return False
+        if not option_found:
+            print("⚠️ Опция 'All' или максимальное значение не найдены")
+            return False
+        
+        # Дополнительное ожидание для полной загрузки таблицы
+        time.sleep(3)
+        
+        # Проверяем количество строк после расширения
+        try:
+            rows = driver.find_elements(By.CSS_SELECTOR, "tbody tr")
+            print(f"📊 Строк после расширения: {len(rows)}")
+            
+            # Проверяем, что данные действительно загрузились
+            if len(rows) > 10:  # Если больше 10 строк, считаем успешным
+                print("✅ Таблица успешно расширена")
+                return True
+            else:
+                print("⚠️ Таблица не была полностью расширена")
+                return False
+                
+        except Exception as e:
+            print(f"⚠️ Ошибка подсчета строк: {e}")
+            return False
         
     except Exception as e:
         print(f"⚠️ Ошибка при попытке показать все строки: {e}")
@@ -278,51 +342,54 @@ def close_any_overlays_fast(driver):
         pass
 
 def find_server_element_optimized(driver, server_name):
-    """Оптимизированный поиск элемента сервера с приоритетными селекторами"""
+    """Оптимизированный поиск элемента сервера с улучшенными селекторами"""
     config = get_performance_config()
     
     try:
         close_any_overlays_fast(driver)
         
-        # Приоритетные стратегии поиска на основе записи Chrome
-        # tr:nth-of-type(45) span > span - структура из записи
+        # Сначала убеждаемся, что таблица загружена
+        try:
+            WebDriverWait(driver, 2).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "tbody tr"))
+            )
+        except TimeoutException:
+            print("⚠️ Таблица не найдена")
+            return None
+        
+        # Обновленные приоритетные стратегии поиска
         priority_strategies = [
-            # Самые быстрые и специфичные селекторы на основе записи Chrome
-            f"//tbody//tr//td[1]//span//span[text()='{server_name}']",  # Структура из записи
-            f"//tbody//tr//td[1]//span[text()='{server_name}']",
-            f"//table//tbody//tr//td[1][text()='{server_name}' or .//text()='{server_name}']",
+            # Поиск в первой колонке таблицы (название сервера)
+            f"//tbody//tr//td[1]//text()[normalize-space()='{server_name}']/parent::*",
+            f"//tbody//tr//td[1][normalize-space(text())='{server_name}']",
+            f"//tbody//tr//td[1]//span[normalize-space(text())='{server_name}']",
+            f"//tbody//tr//td[1]//*[normalize-space(text())='{server_name}']",
             
-            # Более общие селекторы
-            f"//tbody//td[text()='{server_name}']",
-            f"//tbody//span[text()='{server_name}']",
-            f"//tr//td[1][contains(text(), '{server_name}')]",
+            # Более общие селекторы для первой колонки
+            f"//tbody//tr//td[1][contains(normalize-space(text()), '{server_name}')]",
+            f"//tbody//tr//td[1]//*[contains(normalize-space(text()), '{server_name}')]",
             
-            # Селекторы для Vuetify таблиц
-            f"//div[contains(@class, 'v-data-table')]//tbody//td[text()='{server_name}']",
-            f"//div[contains(@class, 'v-data-table')]//span[text()='{server_name}']",
+            # Поиск по всей таблице, если в первой колонке нет
+            f"//tbody//tr//td[normalize-space(text())='{server_name}']",
+            f"//tbody//tr//td//span[normalize-space(text())='{server_name}']",
+            f"//tbody//tr//td//*[normalize-space(text())='{server_name}']",
             
-            # Частичное совпадение
-            f"//tbody//td[contains(text(), '{server_name}')]",
-            f"//tbody//span[contains(text(), '{server_name}')]",
+            # Частичное совпадение по всей таблице
+            f"//tbody//tr//td[contains(normalize-space(text()), '{server_name}')]",
+            f"//tbody//tr//td//*[contains(normalize-space(text()), '{server_name}')]",
             
-            # Общие селекторы (медленнее)
-            f"//td[text()='{server_name}']",
-            f"//span[text()='{server_name}']",
-            f"//*[text()='{server_name}']",
-            
-            # Нормализованный поиск
-            f"//td[normalize-space(text())='{server_name}']",
-            f"//span[normalize-space(text())='{server_name}']",
+            # Поиск по всему документу (медленнее)
+            f"//*[normalize-space(text())='{server_name}']",
             f"//*[contains(normalize-space(text()), '{server_name}')]"
         ]
         
-        # Используем все стратегии согласно требованиям
-        strategies_to_use = priority_strategies if config['use_all_strategies'] else priority_strategies[:8]
+        # Используем все стратегии согласно настройкам
+        strategies_to_use = priority_strategies if config['use_all_strategies'] else priority_strategies[:6]
         
         for i, strategy in enumerate(strategies_to_use):
             try:
                 if config['debug_search']:
-                    print(f"🔍 Стратегия {i+1}: {strategy}")
+                    print(f"🔍 Стратегия {i+1}: поиск '{server_name}'")
                 
                 # Быстрый поиск с коротким таймаутом
                 elements = WebDriverWait(driver, config['strategy_timeout']).until(
@@ -332,16 +399,22 @@ def find_server_element_optimized(driver, server_name):
                 if config['debug_search']:
                     print(f"   Найдено элементов: {len(elements)}")
                 
-                # Быстрая проверка первого подходящего элемента
+                # Проверяем найденные элементы
                 for element in elements:
                     try:
                         if element.is_displayed():
                             element_text = element.text.strip()
+                            if config['debug_search']:
+                                print(f"   Проверяем элемент: '{element_text}'")
+                            
+                            # Точное совпадение или частичное совпадение
                             if element_text == server_name or server_name in element_text:
                                 if config['debug_search']:
-                                    print(f"   ✅ Найден элемент: '{element_text}'")
+                                    print(f"   ✅ Найден подходящий элемент: '{element_text}'")
                                 return element
-                    except Exception:
+                    except Exception as e:
+                        if config['debug_search']:
+                            print(f"   ⚠️ Ошибка проверки элемента: {e}")
                         continue
                         
             except TimeoutException:
@@ -354,7 +427,7 @@ def find_server_element_optimized(driver, server_name):
                 continue
         
         if config['debug_search']:
-            print(f"❌ Сервер '{server_name}' не найден")
+            print(f"❌ Сервер '{server_name}' не найден после проверки всех стратегий")
         return None
         
     except Exception as e:
