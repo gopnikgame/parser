@@ -545,18 +545,40 @@ def update_config_file(filename, servers_data, is_relay_file=False):
         output_dir = '/app/output' if os.path.exists('/app') else './output'
         os.makedirs(output_dir, exist_ok=True)
         
-        # Создаем резервную копию ОРИГИНАЛЬНОГО файла
+        # Убеждаемся, что у нас есть права на запись в output директорию
+        try:
+            os.chmod(output_dir, 0o777)
+        except PermissionError:
+            print(f"⚠️ Не удалось изменить права директории {output_dir}")
+        
+        # Создаем резервную копию ОРИГИНАЛЬНОГО файла с обработкой ошибок
         backup_filename = os.path.join(output_dir, f"{os.path.basename(filename)}.original_backup")
-        with open(backup_filename, 'w', encoding='utf-8') as f:
-            f.writelines(lines)
+        try:
+            with open(backup_filename, 'w', encoding='utf-8') as f:
+                f.writelines(lines)
+            print(f"💾 Резервная копия создана: {backup_filename}")
+        except PermissionError as e:
+            print(f"⚠️ Не удалось создать резервную копию {backup_filename}: {e}")
+            print("📝 Продолжаем без создания резервной копии...")
         
         # Записываем обновленный файл в output
         output_filename = os.path.join(output_dir, os.path.basename(filename))
-        with open(output_filename, 'w', encoding='utf-8') as f:
-            f.writelines(updated_lines)
-        
-        print(f"✅ Файл {output_filename} обновлен. Обновлено серверов: {updated_count}")
-        print(f"💾 Резервная копия оригинала: {backup_filename}")
+        try:
+            with open(output_filename, 'w', encoding='utf-8') as f:
+                f.writelines(updated_lines)
+            print(f"✅ Файл {output_filename} успешно обновлен. Обновлено серверов: {updated_count}")
+        except PermissionError as e:
+            print(f"❌ Ошибка записи файла {output_filename}: {e}")
+            # Пробуем записать в альтернативное место
+            fallback_filename = f"/tmp/{os.path.basename(filename)}"
+            try:
+                with open(fallback_filename, 'w', encoding='utf-8') as f:
+                    f.writelines(updated_lines)
+                print(f"✅ Файл сохранен в {fallback_filename}")
+                return updated_count
+            except Exception as fallback_error:
+                print(f"❌ Критическая ошибка: не удалось сохранить файл: {fallback_error}")
+                return 0
         
         return updated_count
         
