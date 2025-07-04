@@ -106,6 +106,176 @@ def setup_driver():
         print(f"❌ Ошибка запуска Chrome: {str(e)}")
         return None
 
+def debug_page_structure(driver):
+    """Глубокий анализ структуры страницы для отладки"""
+    try:
+        print("🔍 ГЛУБОКИЙ АНАЛИЗ СТРУКТУРЫ СТРАНИЦЫ...")
+        
+        # 1. Проверяем заголовок страницы
+        title = driver.title
+        print(f"📄 Заголовок страницы: {title}")
+        
+        # 2. Ищем все возможные контейнеры с данными
+        containers = [
+            "#app", "[data-app]", ".v-application", ".v-main", 
+            ".container", ".v-data-table", "table", ".datatable",
+            ".servers", ".server-list", "#servers", "#server-list"
+        ]
+        
+        for container in containers:
+            try:
+                elements = driver.find_elements(By.CSS_SELECTOR, container)
+                if elements:
+                    print(f"✅ Найден контейнер: {container} ({len(elements)} элементов)")
+                    for i, elem in enumerate(elements[:3]):
+                        if elem.is_displayed():
+                            text_preview = elem.text[:100].replace('\n', ' ')
+                            print(f"   [{i+1}] Видимый: {text_preview}...")
+            except:
+                continue
+        
+        # 3. Ищем все таблицы и их содержимое
+        print("\n📊 АНАЛИЗ ТАБЛИЦ:")
+        tables = driver.find_elements(By.TAG_NAME, "table")
+        print(f"Найдено таблиц: {len(tables)}")
+        
+        for i, table in enumerate(tables):
+            if table.is_displayed():
+                rows = table.find_elements(By.TAG_NAME, "tr")
+                print(f"  Таблица {i+1}: {len(rows)} строк, видима: {table.is_displayed()}")
+                
+                # Показываем первые несколько строк
+                for j, row in enumerate(rows[:5]):
+                    if row.text.strip():
+                        print(f"    Строка {j+1}: {row.text[:80]}...")
+        
+        # 4. Проверяем состояние загрузки
+        print("\n⏳ СОСТОЯНИЕ ЗАГРУЗКИ:")
+        loading_indicators = [
+            ".v-progress-linear", ".loading", ".spinner", 
+            "[role='progressbar']", ".v-skeleton-loader"
+        ]
+        
+        for indicator in loading_indicators:
+            elements = driver.find_elements(By.CSS_SELECTOR, indicator)
+            if elements:
+                print(f"⏳ Найден индикатор загрузки: {indicator}")
+        
+        # 5. Проверяем JavaScript ошибки
+        try:
+            logs = driver.get_log('browser')
+            errors = [log for log in logs if log['level'] in ['SEVERE', 'WARNING']]
+            if errors:
+                print(f"\n⚠️ JavaScript проблемы ({len(errors)}):")
+                for error in errors[:3]:
+                    print(f"   {error['level']}: {error['message'][:100]}...")
+        except:
+            pass
+        
+        # 6. Выполняем JavaScript запросы для диагностики
+        try:
+            print("\n🔧 JavaScript ДИАГНОСТИКА:")
+            
+            # Проверяем Vue.js
+            vue_version = driver.execute_script("return window.Vue ? Vue.version || 'detected' : 'not found';")
+            print(f"Vue.js: {vue_version}")
+            
+            # Проверяем данные в Vue компонентах
+            vue_data = driver.execute_script("""
+                var app = document.querySelector('[data-app]');
+                if (app && app.__vue__) {
+                    return 'Vue instance found';
+                }
+                return 'No Vue instance';
+            """)
+            print(f"Vue instance: {vue_data}")
+            
+            # Проверяем состояние готовности DOM
+            dom_state = driver.execute_script("return document.readyState;")
+            print(f"DOM состояние: {dom_state}")
+            
+            # Ищем данные в window объекте
+            window_data = driver.execute_script("""
+                var keys = Object.keys(window).filter(k => 
+                    k.toLowerCase().includes('server') || 
+                    k.toLowerCase().includes('data') ||
+                    k.toLowerCase().includes('vue')
+                );
+                return keys.slice(0, 10);
+            """)
+            print(f"Данные в window: {window_data}")
+            
+        except Exception as e:
+            print(f"⚠️ Ошибка JavaScript диагностики: {e}")
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ Ошибка анализа страницы: {e}")
+        return False
+
+
+def wait_for_dynamic_content(driver, timeout=300):
+    """Интеллектуальное ожидание динамического контента"""
+    try:
+        print("⏳ Интеллектуальное ожидание динамического контента...")
+        
+        start_time = time.time()
+        last_content_length = 0
+        stable_count = 0
+        
+        while time.time() - start_time < timeout:
+            try:
+                # Проверяем различные индикаторы загрузки
+                current_content_length = len(driver.page_source)
+                
+                # Ждем завершения всех сетевых запросов
+                network_idle = driver.execute_script("""
+                    return window.performance.getEntriesByType('resource')
+                        .filter(r => r.responseEnd === 0).length === 0;
+                """)
+                
+                # Проверяем отсутствие загрузочных элементов
+                loading_elements = driver.find_elements(By.CSS_SELECTOR, 
+                    ".v-progress-linear, .loading, .spinner, [role='progressbar'], .v-skeleton-loader")
+                loading_active = any(elem.is_displayed() for elem in loading_elements)
+                
+                # Проверяем наличие данных в таблице
+                data_rows = driver.find_elements(By.CSS_SELECTOR, "table tbody tr, .v-data-table tbody tr")
+                visible_rows = [row for row in data_rows if row.is_displayed() and row.text.strip() and "loading" not in row.text.lower()]
+                
+                print(f"⏳ Проверка: сеть={network_idle}, загрузка={not loading_active}, строк={len(visible_rows)}, размер={current_content_length}")
+                
+                # Условия готовности
+                if (network_idle and not loading_active and len(visible_rows) > 10):
+                    print(f"✅ Контент готов: {len(visible_rows)} строк данных")
+                    return True
+                
+                # Проверяем стабильность контента
+                if current_content_length == last_content_length:
+                    stable_count += 1
+                else:
+                    stable_count = 0
+                    last_content_length = current_content_length
+                
+                # Если контент стабилен более 30 секунд, считаем загруженным
+                if stable_count > 10:
+                    print(f"✅ Контент стабилизировался ({len(visible_rows)} строк)")
+                    return len(visible_rows) > 0
+                
+                time.sleep(3)
+                
+            except Exception as e:
+                print(f"⚠️ Ошибка во время ожидания: {e}")
+                time.sleep(5)
+        
+        print("⚠️ Таймаут ожидания динамического контента")
+        return False
+        
+    except Exception as e:
+        print(f"❌ Критическая ошибка ожидания: {e}")
+        return False
+
 def wait_for_vue_app_ready(driver, timeout=60):
     """ИСПРАВЛЕННОЕ ожидание готовности Vue.js приложения"""
     try:
@@ -212,6 +382,137 @@ def wait_for_datatable_load(driver, timeout=60):
         print("⚠️ Данные в таблице не загрузились")
         return False
 
+
+def try_pagination_strategies(driver):
+    """Множественные стратегии работы с пагинацией"""
+    try:
+        print("🔧 Попытка различных стратегий пагинации...")
+        
+        # Стратегия 1: Vuetify 2.x пагинация
+        pagination_selectors = [
+            ".v-datatable__actions .v-select",
+            ".v-data-table__footer .v-select",
+            ".v-pagination .v-select",
+            "select[aria-label*='per page']",
+            "select[aria-label*='rows']",
+            ".per-page-select",
+            ".rows-per-page select"
+        ]
+        
+        for selector in pagination_selectors:
+            try:
+                dropdown = driver.find_element(By.CSS_SELECTOR, selector)
+                if dropdown.is_displayed():
+                    print(f"✅ Найден dropdown пагинации: {selector}")
+                    
+                    # Кликаем на dropdown
+                    ActionChains(driver).move_to_element(dropdown).click().perform()
+                    time.sleep(2)
+                    
+                    # Ищем опцию "All" или максимальное значение
+                    all_options = [
+                        "//div[contains(@class, 'v-list__tile__title') and (text()='All' or text()='Все' or text()='-1')]",
+                        "//li[contains(text(), 'All') or contains(text(), 'Все')]",
+                        "//option[contains(text(), 'All') or contains(text(), 'Все') or @value='-1']",
+                        "//div[contains(@class, 'v-list-item__title') and (text()='All' or text()='Все')]"
+                    ]
+                    
+                    for option_xpath in all_options:
+                        try:
+                            option = WebDriverWait(driver, 5).until(
+                                EC.element_to_be_clickable((By.XPATH, option_xpath))
+                            )
+                            option.click()
+                            print(f"✅ Выбрана опция 'All'")
+                            time.sleep(5)
+                            return True
+                        except:
+                            continue
+                    
+                    # Если "All" не найдено, ищем максимальное число
+                    try:
+                        max_options = driver.find_elements(By.XPATH, "//div[contains(@class, 'v-list__tile__title') and text() > '50']")
+                        if max_options:
+                            max_option = max(max_options, key=lambda x: int(x.text) if x.text.isdigit() else 0)
+                            max_option.click()
+                            print(f"✅ Выбрана максимальная опция: {max_option.text}")
+                            time.sleep(5)
+                            return True
+                    except:
+                        pass
+                    
+                    # Закрываем dropdown
+                    driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
+                    time.sleep(1)
+                    
+            except Exception as e:
+                continue
+        
+        # Стратегия 2: Проверяем наличие кнопок пагинации и кликаем "последняя страница"
+        try:
+            last_page_selectors = [
+                ".v-pagination__navigation--end",
+                ".pagination .last",
+                "[aria-label*='last page']",
+                "[aria-label*='последняя']"
+            ]
+            
+            for selector in last_page_selectors:
+                try:
+                    last_button = driver.find_element(By.CSS_SELECTOR, selector)
+                    if last_button.is_displayed() and last_button.is_enabled():
+                        last_button.click()
+                        print(f"✅ Переход на последнюю страницу")
+                        time.sleep(5)
+                        return True
+                except:
+                    continue
+        except:
+            pass
+        
+        # Стратегия 3: JavaScript принудительная загрузка всех данных
+        try:
+            print("🔧 Попытка JavaScript принудительной загрузки...")
+            driver.execute_script("""
+                // Пытаемся найти Vue компонент и установить большой лимит
+                var app = document.querySelector('[data-app]');
+                if (app && app.__vue__) {
+                    var vm = app.__vue__;
+                    if (vm.$data && vm.$data.itemsPerPage) {
+                        vm.$data.itemsPerPage = -1;
+                    }
+                    if (vm.$data && vm.$data.pagination) {
+                        vm.$data.pagination.rowsPerPage = -1;
+                    }
+                }
+                
+                // Пытаемся найти все селекты и установить максимальное значение
+                var selects = document.querySelectorAll('select');
+                selects.forEach(function(select) {
+                    var options = select.options;
+                    for (var i = options.length - 1; i >= 0; i--) {
+                        if (options[i].value === '-1' || options[i].text.includes('All')) {
+                            select.selectedIndex = i;
+                            select.dispatchEvent(new Event('change'));
+                            break;
+                        }
+                    }
+                });
+            """)
+            time.sleep(10)
+            print("✅ JavaScript принудительная настройка выполнена")
+            return True
+        except Exception as e:
+            print(f"⚠️ JavaScript настройка не удалась: {e}")
+        
+        print("⚠️ Все стратегии пагинации не сработали")
+        return False
+        
+    except Exception as e:
+        print(f"❌ Ошибка стратегий пагинации: {e}")
+        return False
+
+
 def set_pagination_to_all(driver):
     """Установка пагинации на 'All' для отображения всех серверов"""
     try:
@@ -248,6 +549,116 @@ def set_pagination_to_all(driver):
     except Exception as e:
         print(f"⚠️ Не удалось установить пагинацию: {e}")
         return False
+
+
+def enhanced_get_all_server_rows(driver):
+    """Улучшенное получение всех строк серверов с множественными стратегиями"""
+    try:
+        print("🔍 УЛУЧШЕННЫЙ поиск строк серверов...")
+        
+        # Прокрутка страницы для загрузки lazy-loading контента
+        print("📜 Прокрутка для загрузки lazy-content...")
+        for i in range(5):
+            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+            time.sleep(2)
+            driver.execute_script("window.scrollTo(0, 0);")
+            time.sleep(1)
+        
+        # Множественные селекторы для строк
+        enhanced_row_selectors = [
+            # Vuetify селекторы
+            ".v-data-table tbody tr:not(.v-data-table__progress)",
+            ".v-data-table .v-data-table__wrapper tbody tr",
+            ".v-datatable tbody tr",
+            ".v-table tbody tr",
+            
+            # Стандартные HTML селекторы
+            "table tbody tr",
+            "tbody tr",
+            
+            # Возможные кастомные селекторы
+            ".servers-table tbody tr",
+            ".server-list tr",
+            "[data-server] tr",
+            ".data-table tbody tr",
+            
+            # Общие селекторы
+            "tr[role='row']",
+            "tr:not([role='columnheader'])",
+            "div[role='row']"  # На случай если используют div вместо tr
+        ]
+        
+        all_rows = []
+        found_selectors = []
+        
+        for selector in enhanced_row_selectors:
+            try:
+                rows = driver.find_elements(By.CSS_SELECTOR, selector)
+                valid_rows = []
+                
+                for row in rows:
+                    try:
+                        if (row.is_displayed() and 
+                            row.text.strip() and 
+                            "No data available" not in row.text and
+                            "loading" not in row.text.lower() and
+                            len(row.text.strip()) > 10):  # Фильтруем пустые строки
+                            
+                            # Проверяем наличие ячеек
+                            cells = row.find_elements(By.TAG_NAME, "td")
+                            if not cells:  # Возможно это div-строка
+                                cells = row.find_elements(By.CSS_SELECTOR, "div[role='cell'], .cell, [data-cell]")
+                            
+                            if len(cells) >= 2:  # Минимум 2 ячейки
+                                first_cell_text = cells[0].text.strip()
+                                if first_cell_text and len(first_cell_text) > 2:
+                                    valid_rows.append(row)
+                    except:
+                        continue
+                
+                if valid_rows:
+                    print(f"✅ Селектор '{selector}': найдено {len(valid_rows)} валидных строк")
+                    all_rows.extend(valid_rows)
+                    found_selectors.append(selector)
+                    
+            except Exception as e:
+                continue
+        
+        # Убираем дубликаты по тексту
+        unique_rows = []
+        seen_texts = set()
+        
+        for row in all_rows:
+            try:
+                row_text = row.text.strip()[:100]  # Первые 100 символов для сравнения
+                if row_text not in seen_texts and len(row_text) > 10:
+                    seen_texts.add(row_text)
+                    unique_rows.append(row)
+            except:
+                continue
+        
+        print(f"✅ Найдено {len(unique_rows)} уникальных строк серверов")
+        print(f"📊 Использованные селекторы: {found_selectors}")
+        
+        # Выводим примеры найденных строк
+        for i, row in enumerate(unique_rows[:5]):
+            try:
+                cells = row.find_elements(By.TAG_NAME, "td")
+                if not cells:
+                    cells = row.find_elements(By.CSS_SELECTOR, "div[role='cell'], .cell")
+                
+                if cells:
+                    first_cell = cells[0].text.strip()
+                    print(f"   Пример {i+1}: {first_cell}")
+            except:
+                continue
+        
+        return unique_rows
+        
+    except Exception as e:
+        print(f"❌ Ошибка улучшенного поиска строк: {e}")
+        return []
+
 
 def get_all_server_rows(driver):
     """ИСПРАВЛЕННОЕ получение всех строк серверов"""
@@ -858,8 +1269,8 @@ def push_to_github(total_updated):
         return False
 
 def main():
-    """Главная функция с улучшенной обработкой Vue.js"""
-    print("🚀 Запуск ИСПРАВЛЕННОГО парсера DNSCrypt серверов (Vue.js)")
+    """КАРДИНАЛЬНО УЛУЧШЕННАЯ главная функция с глубокой диагностикой"""
+    print("🚀 Запуск КАРДИНАЛЬНО УЛУЧШЕННОГО парсера DNSCrypt серверов")
     print("=" * 70)
     
     # Создаем директорию output
@@ -909,45 +1320,77 @@ def main():
         print("\n🔄 Переход на страницу dnscrypt.info...")
         driver.get("https://dnscrypt.info/public-servers")
         
-        print("⏳ Ожидание полной загрузки страницы (может занять до 2 минут)...")
-
-        # Ждем Vue.js с большим таймаутом
-        vue_loaded = wait_for_vue_app_ready(driver, timeout=120)
-        if not vue_loaded:
-            print("⚠️ Vue.js не загрузился, но продолжаем...")
+        # ГЛУБОКАЯ ДИАГНОСТИКА СТРАНИЦЫ
+        print("\n" + "="*50)
+        print("🔍 ЭТАП 1: ГЛУБОКАЯ ДИАГНОСТИКА")
+        print("="*50)
+        debug_page_structure(driver)
         
-        # Ждем загрузки данных в таблицу
-        data_loaded = wait_for_datatable_load(driver, timeout=120)
-        if not data_loaded:
-            print("⚠️ Данные не загрузились полностью, но продолжаем...")
+        # ИНТЕЛЛЕКТУАЛЬНОЕ ОЖИДАНИЕ
+        print("\n" + "="*50)
+        print("⏳ ЭТАП 2: ИНТЕЛЛЕКТУАЛЬНОЕ ОЖИДАНИЕ")
+        print("="*50)
+        content_ready = wait_for_dynamic_content(driver, timeout=300)  # 5 минут
         
-        # Попытка установить пагинацию "All"
-        try:
-            set_pagination_to_all(driver)
-        except Exception as e:
-            print(f"⚠️ Ошибка установки пагинации: {e}")
-
-        print("⏳ Дополнительное ожидание загрузки всех данных...")
-        time.sleep(30)
+        if not content_ready:
+            print("⚠️ Контент не загрузился полностью, но продолжаем...")
+        
+        # СТРАТЕГИИ ПАГИНАЦИИ
+        print("\n" + "="*50)
+        print("🔧 ЭТАП 3: НАСТРОЙКА ПАГИНАЦИИ")
+        print("="*50)
+        pagination_success = try_pagination_strategies(driver)
+        
+        if pagination_success:
+            print("⏳ Ожидание после настройки пагинации...")
+            wait_for_dynamic_content(driver, timeout=60)
+        
+        # УЛУЧШЕННЫЙ ПОИСК СТРОК
+        print("\n" + "="*50)
+        print("🔍 ЭТАП 4: ПОИСК ДАННЫХ")
+        print("="*50)
         
         # Объединяем все целевые серверы
         all_target_servers = relay_servers + dnscrypt_servers
         
-        # Обрабатываем серверы с сайта
-        all_servers_data, total_successful = process_servers_from_website(driver, all_target_servers)
+        # Получаем строки улучшенным методом
+        all_rows = enhanced_get_all_server_rows(driver)
         
+        if not all_rows:
+            print("❌ Не удалось найти строки серверов")
+            
+            # Последняя попытка - повторная диагностика
+            print("\n🔄 ПОСЛЕДНЯЯ ПОПЫТКА - повторная диагностика...")
+            debug_page_structure(driver)
+            
+            # Пробуем обновить страницу
+            print("🔄 Обновление страницы...")
+            driver.refresh()
+            wait_for_dynamic_content(driver, timeout=120)
+            all_rows = enhanced_get_all_server_rows(driver)
+        
+        if all_rows:
+            print(f"\n✅ Найдено {len(all_rows)} строк, начинаем обработку...")
+            
+            # Обрабатываем серверы
+            all_servers_data, total_successful = process_servers_from_website(driver, all_target_servers)
+        else:
+            print("❌ Критическая ошибка: данные не найдены")
+            all_servers_data, total_successful = {}, 0
+        
+        # Остальная часть функции остается прежней...
         # Разделяем данные по типам
         relay_data = {name: info for name, info in all_servers_data.items() 
-                     if info['protocol'] == 'DNSCrypt relay'}
+                     if info.get('protocol') == 'DNSCrypt relay'}
         server_data = {name: info for name, info in all_servers_data.items() 
-                      if info['protocol'] == 'DNSCrypt'}
+                      if info.get('protocol') == 'DNSCrypt'}
         
-        # Статистика с временем
+        # Статистика
         total_time = time.time() - total_start_time
         total_processed = len(all_target_servers)
         
         print(f"\n{'='*70}")
-        print("📊 ИТОГОВАЯ СТАТИСТИКА (Vue.js парсер)")
+        print("📊 ИТОГОВАЯ СТАТИСТИКА (Кардинально улучшенный парсер)")
         print('='*70)
         print(f"Всего серверов для поиска: {total_processed}")
         print(f"  - Релеев: {len(relay_servers)} (найдено: {len(relay_data)})")
@@ -972,47 +1415,14 @@ def main():
             updated_count = update_config_file('DNSCrypt_servers.txt', server_data, is_relay_file=False)
             total_updated += updated_count
         
-        # Создаем сводный отчет в output директории
         if total_updated > 0:
-            report_file = os.path.join(output_dir, "update_report.txt")
-            with open(report_file, "w", encoding="utf-8") as f:
-                f.write("# Отчет об обновлении DNSCrypt серверов - Vue.js парсер\n")
-                f.write(f"# Дата: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-                f.write(f"# Общее время: {total_time:.1f}с\n\n")
-                f.write(f"Всего серверов обработано: {total_processed}\n")
-                f.write(f"Успешно обновлено: {total_updated}\n\n")
-                
-                if relay_data:
-                    f.write("РЕЛЕИ:\n")
-                    for name, info in relay_data.items():
-                        f.write(f"{name:<30} -> {info['ip']} ({info['protocol']})\n")
-                    f.write("\n")
-                
-                if server_data:
-                    f.write("СЕРВЕРЫ:\n")
-                    for name, info in server_data.items():
-                        f.write(f"{name:<30} -> {info['ip']} ({info['protocol']})\n")
-            
-            print(f"✅ Отчет сохранен в {report_file}")
-            print(f"\n🎉 УСПЕШНО ЗАВЕРШЕНО!")
-            print(f"📁 Созданы обновленные файлы в {output_dir}:")
-            print(f"   - DNSCrypt_relay.txt ({len(relay_data)} релеев)")
-            print(f"   - DNSCrypt_servers.txt ({len(server_data)} серверов)")
-            print(f"   - update_report.txt (отчет)")
-            
             # Отправка в GitHub
-            print(f"\n{'='*70}")
-            print("🚀 ОТПРАВКА ОБНОВЛЕНИЙ В GITHUB")
-            print('='*70)
-            
-            # Проверяем наличие токена
             github_token = os.getenv('GITHUB_TOKEN')
-            if not github_token:
-                print("⚠️ GitHub token не найден в переменных окружения")
-                print("⚠️ Отправка в GitHub пропущена")
-            else:
+            if github_token:
                 print("🔑 GitHub token найден, начинаем отправку...")
                 push_to_github(total_updated)
+            else:
+                print("⚠️ GitHub token не найден, отправка пропущена")
         else:
             print("❌ Нет данных для обновления файлов")
     
@@ -1031,18 +1441,14 @@ def main():
         kill_existing_chrome()
         
         # Очистка временных файлов
-        print("🧹 Очистка временных файлов...")
         for temp_file in temp_files:
             try:
                 if os.path.exists(temp_file):
                     os.remove(temp_file)
-                    print(f"🗑️ Удален временный файл: {temp_file}")
-            except Exception as e:
-                print(f"⚠️ Не удалось удалить {temp_file}: {e}")
+            except:
+                pass
         
-        print("\n✅ ПАРСИНГ ЗАВЕРШЕН! (Vue.js версия)")
-        config_github = get_github_config()
-        print(f"🔗 Репозиторий: https://github.com/{config_github['owner']}/{config_github['repo']}")
+        print(f"\n✅ ПАРСИНГ ЗАВЕРШЕН!")
 
 if __name__ == "__main__":
     main()
