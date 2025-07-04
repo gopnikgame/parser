@@ -18,33 +18,71 @@ import os
 import requests
 import base64
 import json
+import signal
+import psutil
 from dotenv import load_dotenv
 
 # Загружаем переменные окружения из .env файла
 load_dotenv()
 
 def get_default_chrome_options():
-    """Базовые опции Chrome для работы с Vue.js приложениями"""
+    """ИСПРАВЛЕННЫЕ опции Chrome для стабильной работы"""
     options = webdriver.ChromeOptions()
+    
+    # Базовые опции для Docker
     options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage") 
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
     options.add_argument("--disable-extensions")
+    options.add_argument("--disable-plugins")
+    options.add_argument("--disable-images")
+    
+    # КРИТИЧЕСКИЕ ИСПРАВЛЕНИЯ для Docker
+    options.add_argument("--remote-debugging-port=9222")
+    options.add_argument("--disable-background-timer-throttling")
+    options.add_argument("--disable-backgrounding-occluded-windows")
+    options.add_argument("--disable-renderer-backgrounding")
+    options.add_argument("--disable-features=TranslateUI")
+    options.add_argument("--disable-ipc-flooding-protection")
+    
+    # Настройки для стабильности
+    options.add_argument("--max_old_space_size=4096")
+    options.add_argument("--single-process")
+    options.add_argument("--no-zygote")
+    
+    # Размер окна
     options.add_argument("--window-size=1920,1080")
-    options.add_argument("--disable-blink-features=AutomationControlled")
-    options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    options.add_experimental_option('useAutomationExtension', False)
+    
+    # User agent
+    options.add_argument("--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     
     # Headless режим
     if os.getenv('CHROME_HEADLESS', 'true').lower() == 'true':
-        options.add_argument("--headless")
+        options.add_argument("--headless=new")
+    
+    # Отключаем автоматизацию
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option('useAutomationExtension', False)
     
     return options
 
 def kill_existing_chrome():
     """Убиваем все процессы Chrome перед запуском"""
     try:
-        subprocess.run(['pkill', '-f', 'chrome'], check=False)
-        subprocess.run(['pkill', '-f', 'chromium'], check=False)
+        # Убиваем все процессы Chrome
+        for proc in psutil.process_iter(['pid', 'name']):
+            if proc.info['name'] and 'chrome' in proc.info['name'].lower():
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=3)
+                except:
+                    try:
+                        proc.kill()
+                    except:
+                        pass
+        
+        subprocess.run(['pkill', '-f', 'chrome'], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(['pkill', '-f', 'chromium'], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         time.sleep(2)
         print("✅ Существующие процессы Chrome завершены")
     except Exception as e:
@@ -68,53 +106,107 @@ def setup_driver():
         print(f"❌ Ошибка запуска Chrome: {str(e)}")
         return None
 
-def wait_for_vue_app_ready(driver, timeout=30):
-    """Ожидание готовности Vue.js приложения"""
+def wait_for_vue_app_ready(driver, timeout=60):
+    """ИСПРАВЛЕННОЕ ожидание готовности Vue.js приложения"""
     try:
         print("⏳ Ожидание загрузки Vue.js приложения...")
         
-        # Ждем загрузки основного Vue приложения
+        # Увеличенное время ожидания базовой загрузки
         WebDriverWait(driver, timeout).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, "[data-app='true']"))
+            lambda d: d.execute_script("return document.readyState") == "complete"
         )
         
-        # Ждем загрузки Vue компонентов
-        WebDriverWait(driver, timeout).until(
-            lambda d: d.execute_script("return typeof Vue !== 'undefined'")
-        )
+        # Ждем загрузки Vue приложения с несколькими попытками
+        vue_ready = False
+        for attempt in range(5):
+            try:
+                # Проверяем различные признаки загрузки Vue
+                vue_checks = [
+                    "return typeof Vue !== 'undefined'",
+                    "return document.querySelector('[data-app]') !== null",
+                    "return document.querySelector('.v-application') !== null",
+                    "return document.querySelector('table') !== null",
+                    "return document.querySelector('.v-data-table') !== null"
+                ]
+                
+                for check in vue_checks:
+                    try:
+                        if driver.execute_script(check):
+                            vue_ready = True
+                            break
+                    except:
+                        continue
+                
+                if vue_ready:
+                    break
+                    
+                print(f"⏳ Попытка {attempt + 1}/5 загрузки Vue.js...")
+                time.sleep(10)
+                
+            except Exception as e:
+                print(f"⚠️ Ошибка проверки Vue.js (попытка {attempt + 1}): {e}")
+                time.sleep(5)
         
-        # Ждем пока исчезнет прогресс-бар загрузки
-        WebDriverWait(driver, timeout).until_not(
-            EC.presence_of_element_located((By.CSS_SELECTOR, ".v-progress-linear__bar__indeterminate--active"))
-        )
-        
-        print("✅ Vue.js приложение загружено")
-        return True
-        
+        if vue_ready:
+            print("✅ Vue.js приложение загружено")
+            # Дополнительное ожидание для полной загрузки данных
+            time.sleep(10)
+            return True
+        else:
+            print("⚠️ Vue.js приложение не загрузилось полностью")
+            return False
+            
     except TimeoutException:
         print("⚠️ Таймаут загрузки Vue.js приложения")
         return False
 
-def wait_for_datatable_load(driver, timeout=30):
-    """Ожидание загрузки данных в v-datatable"""
+def wait_for_datatable_load(driver, timeout=60):
+    """ИСПРАВЛЕННОЕ ожидание загрузки данных в таблицу"""
     try:
         print("⏳ Ожидание загрузки данных в таблицу...")
         
-        # Ждем пока таблица не покажет "No data available"
-        WebDriverWait(driver, timeout).until_not(
-            EC.text_to_be_present_in_element(
-                (By.CSS_SELECTOR, ".v-datatable tbody td"), 
-                "No data available"
+        # Ждем появления таблицы
+        try:
+            WebDriverWait(driver, timeout).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "table, .v-data-table, .v-table"))
             )
-        )
+        except TimeoutException:
+            print("⚠️ Таблица не найдена")
+            return False
         
-        # Ждем появления строк с данными
-        WebDriverWait(driver, timeout).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, ".v-datatable tbody tr:not(.v-datatable__progress)"))
-        )
+        # Ждем загрузки данных с множественными проверками
+        for attempt in range(10):
+            try:
+                # Проверяем различные селекторы строк
+                row_selectors = [
+                    "table tbody tr",
+                    ".v-data-table tbody tr",
+                    ".v-table tbody tr", 
+                    "tr[role='row']",
+                    ".v-data-table__wrapper tbody tr"
+                ]
+                
+                for selector in row_selectors:
+                    rows = driver.find_elements(By.CSS_SELECTOR, selector)
+                    visible_rows = [row for row in rows if row.is_displayed() and row.text.strip()]
+                    
+                    if len(visible_rows) > 10:  # Если найдено достаточно строк
+                        print(f"✅ Найдено {len(visible_rows)} строк данных")
+                        return True
+                
+                print(f"⏳ Попытка {attempt + 1}/10 загрузки данных...")
+                time.sleep(6)
+                
+            except Exception as e:
+                print(f"⚠️ Ошибка проверки данных (попытка {attempt + 1}): {e}")
+                time.sleep(3)
         
-        print("✅ Данные в таблице загружены")
-        return True
+        print("⚠️ Данные в таблице не загрузились")
+        return False
+        
+    except TimeoutException:
+        print("⚠️ Данные в таблице не загрузились")
+        return False
         
     except TimeoutException:
         print("⚠️ Данные в таблице не загрузились")
@@ -158,19 +250,54 @@ def set_pagination_to_all(driver):
         return False
 
 def get_all_server_rows(driver):
-    """Получение всех строк серверов из таблицы"""
+    """ИСПРАВЛЕННОЕ получение всех строк серверов"""
     try:
-        # Ждем загрузки всех строк
-        time.sleep(2)
+        print("🔍 Поиск строк серверов...")
         
-        # Получаем все строки таблицы (исключая заголовок и прогресс)
-        rows = driver.find_elements(
-            By.CSS_SELECTOR, 
-            ".v-datatable tbody tr:not(.v-datatable__progress)"
-        )
+        # Ждем немного для стабилизации
+        time.sleep(5)
         
-        print(f"✅ Найдено {len(rows)} строк серверов")
-        return rows
+        # Множественные селекторы для поиска строк
+        row_selectors = [
+            "table tbody tr",
+            ".v-data-table tbody tr",
+            ".v-table tbody tr",
+            "tr[role='row']",
+            ".v-data-table__wrapper tbody tr",
+            ".datatable tbody tr",
+            "tbody tr"
+        ]
+        
+        all_rows = []
+        
+        for selector in row_selectors:
+            try:
+                rows = driver.find_elements(By.CSS_SELECTOR, selector)
+                for row in rows:
+                    if row.is_displayed() and row.text.strip() and "No data available" not in row.text:
+                        # Проверяем что в строке есть имя сервера
+                        cells = row.find_elements(By.TAG_NAME, "td")
+                        if len(cells) >= 3 and cells[0].text.strip():
+                            all_rows.append(row)
+                
+                if len(all_rows) > 50:  # Если нашли достаточно строк, останавливаемся
+                    break
+                    
+            except Exception as e:
+                continue
+        
+        # Убираем дубликаты
+        unique_rows = []
+        seen_texts = set()
+        
+        for row in all_rows:
+            row_text = row.text.strip()
+            if row_text not in seen_texts:
+                seen_texts.add(row_text)
+                unique_rows.append(row)
+        
+        print(f"✅ Найдено {len(unique_rows)} уникальных строк серверов")
+        return unique_rows
         
     except Exception as e:
         print(f"❌ Ошибка получения строк серверов: {e}")
@@ -732,7 +859,7 @@ def push_to_github(total_updated):
 
 def main():
     """Главная функция с улучшенной обработкой Vue.js"""
-    print("🚀 Запуск улучшенного парсера DNSCrypt серверов (Vue.js)")
+    print("🚀 Запуск ИСПРАВЛЕННОГО парсера DNSCrypt серверов (Vue.js)")
     print("=" * 70)
     
     # Создаем директорию output
@@ -782,16 +909,26 @@ def main():
         print("\n🔄 Переход на страницу dnscrypt.info...")
         driver.get("https://dnscrypt.info/public-servers")
         
-        # Ждем загрузки Vue.js приложения
-        if not wait_for_vue_app_ready(driver):
-            print("⚠️ Продолжаем несмотря на проблемы с загрузкой Vue.js...")
+        print("⏳ Ожидание полной загрузки страницы (может занять до 2 минут)...")
+
+        # Ждем Vue.js с большим таймаутом
+        vue_loaded = wait_for_vue_app_ready(driver, timeout=120)
+        if not vue_loaded:
+            print("⚠️ Vue.js не загрузился, но продолжаем...")
         
         # Ждем загрузки данных в таблицу
-        if not wait_for_datatable_load(driver):
-            print("⚠️ Продолжаем несмотря на проблемы с загрузкой данных...")
+        data_loaded = wait_for_datatable_load(driver, timeout=120)
+        if not data_loaded:
+            print("⚠️ Данные не загрузились полностью, но продолжаем...")
         
-        # Устанавливаем пагинацию на "All"
-        set_pagination_to_all(driver)
+        # Попытка установить пагинацию "All"
+        try:
+            set_pagination_to_all(driver)
+        except Exception as e:
+            print(f"⚠️ Ошибка установки пагинации: {e}")
+
+        print("⏳ Дополнительное ожидание загрузки всех данных...")
+        time.sleep(30)
         
         # Объединяем все целевые серверы
         all_target_servers = relay_servers + dnscrypt_servers

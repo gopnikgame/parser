@@ -19,9 +19,12 @@ RUN apt-get update && apt-get install -y \
     lsb-release \
     && rm -rf /var/lib/apt/lists/*
 
-# Добавить в секцию с установкой зависимостей
-RUN mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
+# ИСПРАВЛЕНИЕ X11: Создаем правильную структуру X11
+RUN mkdir -p /tmp/.X11-unix && \
+    chmod 1777 /tmp/.X11-unix && \
+    mkdir -p /var/run/dbus
 
+# Установка Google Chrome
 RUN wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | \
     gpg --dearmor -o /etc/apt/keyrings/google-chrome.gpg && \
     echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" > \
@@ -31,7 +34,7 @@ RUN apt-get update && apt-get install -y \
     google-chrome-stable \
     && rm -rf /var/lib/apt/lists/*
 
-# Установка ChromeDriver
+# Установка ChromeDriver (исправленная версия)
 RUN CHROME_VERSION=$(google-chrome --version | awk '{print $3}' | cut -d. -f1-3) && \
     echo "🔍 Установленная версия Chrome: $CHROME_VERSION" && \
     AVAILABLE_VERSIONS=$(curl -s "https://googlechromelabs.github.io/chrome-for-testing/known-good-versions-with-downloads.json") && \
@@ -53,9 +56,9 @@ RUN CHROME_VERSION=$(google-chrome --version | awk '{print $3}' | cut -d. -f1-3)
 
 WORKDIR /app
 
-RUN useradd -m -u 1000 parser
-
-RUN mkdir -p /app/output && \
+# Создаем пользователя parser
+RUN useradd -m -u 1000 parser && \
+    mkdir -p /app/output && \
     chown -R parser:parser /app
 
 COPY requirements.txt .
@@ -65,9 +68,11 @@ RUN python -m pip install --upgrade pip && \
 
 COPY parser.py scheduler.py ./
 
+# ИСПРАВЛЕНИЕ: Устанавливаем права как root, затем переключаемся на parser
 RUN chown -R parser:parser /app && \
     chmod -R 755 /app
 
 USER parser
 
+# ИСПРАВЛЕНИЕ: Убираем проблемные команды из runtime
 CMD ["python", "scheduler.py"]

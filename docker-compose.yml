@@ -14,7 +14,10 @@ services:
     user: "1000:1000"
     command: >
       sh -c "
-        Xvfb :99 -screen 0 1920x1080x24 &
+        mkdir -p /tmp/.X11-unix && 
+        chmod 1777 /tmp/.X11-unix 2>/dev/null || true &&
+        Xvfb :99 -screen 0 1920x1080x24 -ac +extension GLX +render -noreset &
+        sleep 3 &&
         python scheduler.py
       "
 
@@ -34,6 +37,9 @@ services:
     user: "1000:1000"
     command: >
       sh -c "
-        Xvfb :99 -screen 0 1920x1080x24 &
+        mkdir -p /tmp/.X11-unix && 
+        chmod 1777 /tmp/.X11-unix 2>/dev/null || true &&
+        Xvfb :99 -screen 0 1920x1080x24 -ac +extension GLX +render -noreset &
+        sleep 3 &&
         python parser.py
       "
