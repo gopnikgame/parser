@@ -53,14 +53,10 @@ RUN CHROME_VERSION=$(google-chrome --version | awk '{print $3}' | cut -d. -f1-3)
 
 WORKDIR /app
 
-# Создаем пользователя parser
 RUN useradd -m -u 1000 parser
 
-# Создаем все необходимые директории с правильными правами
 RUN mkdir -p /app/output && \
-    chown -R parser:parser /app && \
-    chmod -R 755 /app && \
-    chmod -R 777 /app/output
+    chown -R parser:parser /app
 
 COPY requirements.txt .
 
@@ -69,14 +65,8 @@ RUN python -m pip install --upgrade pip && \
 
 COPY parser.py scheduler.py ./
 
-# ИСПРАВЛЕНИЕ: Убираем conflicting права и создаем правильную структуру прав
 RUN chown -R parser:parser /app && \
-    chmod 755 /app && \
-    chmod 755 /app/parser.py && \
-    chmod 755 /app/scheduler.py && \
-    chmod -R 755 /app/output && \
-    # Убеждаемся, что пользователь parser может писать в output
-    chown -R parser:parser /app/output
+    chmod -R 755 /app
 
 USER parser
 

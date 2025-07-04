@@ -177,7 +177,7 @@ def get_all_server_rows(driver):
         return []
 
 def extract_server_info_from_row(driver, row):
-    """Извлечение информации о сервере из строки таблицы"""
+    """Улучшенное извлечение информации о сервере из строки таблицы"""
     try:
         # Получаем ячейки строки
         cells = row.find_elements(By.TAG_NAME, "td")
@@ -191,48 +191,98 @@ def extract_server_info_from_row(driver, row):
         if not server_name or server_name == "No data available":
             return None
         
-        # Кликаем на имя сервера для открытия диалога
-        name_element = name_cell.find_element(By.CSS_SELECTOR, "span, a, button, *")
-        
-        # Прокручиваем к элементу и кликаем
-        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", name_element)
-        time.sleep(1)
-        
-        ActionChains(driver).move_to_element(name_element).click().perform()
-        time.sleep(2)
-        
-        # Ищем диалог с информацией о сервере
-        dialog = None
-        dialog_selectors = [
-            ".v-dialog.v-dialog--active",
-            ".v-menu__content--active",
-            ".v-tooltip__content--fixed",
-            "[role='dialog']"
+        # УЛУЧШЕНИЕ: Множественные стратегии поиска кликабельного элемента
+        clickable_element = None
+        click_strategies = [
+            lambda: name_cell.find_element(By.CSS_SELECTOR, "span"),
+            lambda: name_cell.find_element(By.CSS_SELECTOR, "a"),
+            lambda: name_cell.find_element(By.CSS_SELECTOR, "button"),
+            lambda: name_cell.find_element(By.CSS_SELECTOR, "[role='button']"),
+            lambda: name_cell.find_element(By.CSS_SELECTOR, "*[onclick]"),
+            lambda: name_cell  # Если ничего не найдено, кликаем по ячейке
         ]
         
-        for selector in dialog_selectors:
+        for strategy in click_strategies:
             try:
-                dialog = WebDriverWait(driver, 3).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, selector))
-                )
-                if dialog.is_displayed():
-                    break
+                clickable_element = strategy()
+                break
             except:
                 continue
         
-        if not dialog:
+        if not clickable_element:
+            return None
+        
+        # Прокручиваем к элементу и кликаем
+        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", clickable_element)
+        time.sleep(1)
+        
+        # УЛУЧШЕНИЕ: Множественные попытки клика
+        click_attempts = [
+            lambda: clickable_element.click(),
+            lambda: ActionChains(driver).move_to_element(clickable_element).click().perform(),
+            lambda: driver.execute_script("arguments[0].click();", clickable_element),
+            lambda: ActionChains(driver).move_to_element(clickable_element).pause(0.5).click().perform()
+        ]
+        
+        dialog = None
+        for i, click_method in enumerate(click_attempts):
+            try:
+                click_method()
+                time.sleep(2 + i)  # Увеличиваем задержку с каждой попыткой
+                
+                # УЛУЧШЕНИЕ: Расширенный поиск диалогов
+                dialog_selectors = [
+                    ".v-dialog.v-dialog--active .v-card",
+                    ".v-dialog.v-dialog--active",
+                    ".v-menu__content--active .v-card",
+                    ".v-menu__content--active",
+                    ".v-tooltip__content--fixed",
+                    "[role='dialog'] .v-card",
+                    "[role='dialog']",
+                    ".v-overlay--active .v-card",
+                    ".v-overlay--active",
+                    ".modal.show",
+                    ".popup.active"
+                ]
+                
+                for selector in dialog_selectors:
+                    try:
+                        dialog = WebDriverWait(driver, 3).until(
+                            EC.presence_of_element_located((By.CSS_SELECTOR, selector))
+                        )
+                        if dialog.is_displayed() and dialog.text.strip():
+                            break
+                    except:
+                        continue
+                
+                if dialog and dialog.text.strip():
+                    break
+                    
+            except Exception as e:
+                continue
+        
+        if not dialog or not dialog.text.strip():
             print(f"⚠️ Диалог не найден для {server_name}")
             return None
         
         # Извлекаем текст из диалога
         dialog_text = dialog.text
         
-        # Закрываем диалог
-        try:
-            driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
-            time.sleep(1)
-        except:
-            pass
+        # УЛУЧШЕНИЕ: Множественные способы закрытия диалога
+        close_methods = [
+            lambda: driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE),
+            lambda: dialog.find_element(By.CSS_SELECTOR, "button[aria-label*='close']").click(),
+            lambda: dialog.find_element(By.CSS_SELECTOR, ".v-btn--icon").click(),
+            lambda: driver.execute_script("arguments[0].style.display = 'none';", dialog)
+        ]
+        
+        for close_method in close_methods:
+            try:
+                close_method()
+                time.sleep(1)
+                break
+            except:
+                continue
         
         # Парсим информацию из диалога
         info = parse_server_info(dialog_text, server_name)
@@ -400,7 +450,6 @@ def process_servers_from_website(driver, target_servers):
     print(f"\n📊 Успешно обработано: {successful_count}/{len(target_servers)} серверов")
     return servers_data, successful_count
 
-# Остальные функции остаются без изменений (format_relay_line, format_server_line, update_config_file, GitHub функции)
 
 def format_relay_line(server_info):
     """Форматирование строки релея"""
@@ -469,31 +518,45 @@ def update_config_file(filename, servers_data, is_relay_file=False):
                 # Оставляем оригинальную строку
                 updated_lines.append(line)
         
-        # Создаем директорию output если её нет
         output_dir = '/app/output' if os.path.exists('/app') else './output'
-        os.makedirs(output_dir, exist_ok=True)
         
-        # Создаем резервную копию ОРИГИНАЛЬНОГО файла
+        try:
+            if not os.path.exists(output_dir):
+                os.makedirs(output_dir, mode=0o755, exist_ok=True)
+        except PermissionError:
+            print(f"⚠️ Не удалось создать директорию {output_dir}, используем текущую")
+            output_dir = '.'
+        
         backup_filename = os.path.join(output_dir, f"{os.path.basename(filename)}.original_backup")
         try:
             with open(backup_filename, 'w', encoding='utf-8') as f:
                 f.writelines(lines)
             print(f"💾 Резервная копия создана: {backup_filename}")
-        except Exception as e:
-            print(f"⚠️ Не удалось создать резервную копию: {e}")
+        except PermissionError:
+            print(f"⚠️ Не удалось создать резервную копию, продолжаем без неё")
         
-        # Записываем обновленный файл в output
         output_filename = os.path.join(output_dir, os.path.basename(filename))
-        with open(output_filename, 'w', encoding='utf-8') as f:
-            f.writelines(updated_lines)
-        
-        print(f"✅ Файл {output_filename} обновлен. Обновлено серверов: {updated_count}")
+        try:
+            with open(output_filename, 'w', encoding='utf-8') as f:
+                f.writelines(updated_lines)
+            print(f"✅ Файл {output_filename} обновлен. Обновлено серверов: {updated_count}")
+        except PermissionError:
+            # Пробуем записать в альтернативную директорию
+            alt_filename = f"./{os.path.basename(filename)}"
+            try:
+                with open(alt_filename, 'w', encoding='utf-8') as f:
+                    f.writelines(updated_lines)
+                print(f"✅ Файл {alt_filename} обновлен в текущей директории. Обновлено серверов: {updated_count}")
+            except Exception as e:
+                print(f"❌ Критическая ошибка записи файла: {e}")
+                return 0
         
         return updated_count
         
     except Exception as e:
         print(f"❌ Ошибка обновления файла {filename}: {e}")
         return 0
+
 
 # GitHub функции (остаются без изменений)
 def get_github_config():
