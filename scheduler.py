@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Scheduler для автоматического запуска парсера DNSCrypt каждые 7 дней
+Поддержка модульной системы v2.0
 """
 
 import time
@@ -38,17 +39,49 @@ class DNSCryptScheduler:
             logger.setLevel(logging.DEBUG)
             logger.debug("🐛 Включен отладочный режим")
         
-        self.parser_script = '/app/parser.py'
+        # ИСПРАВЛЕНИЕ: Определяем парсер автоматически
+        self.parser_mode = os.getenv('PARSER_MODE', 'auto')
+        self.parser_script = self._determine_parser_script()
         
         # Обработчики сигналов для корректного завершения
         signal.signal(signal.SIGTERM, self.signal_handler)
         signal.signal(signal.SIGINT, self.signal_handler)
         
-        logger.info("🚀 Scheduler DNSCrypt запущен")
+        logger.info("🚀 Scheduler DNSCrypt v2.0 запущен")
         logger.info(f"📅 Интервал обновления: {self.interval_days} дней")
+        logger.info(f"⚙️ Режим парсера: {self.parser_mode}")
+        logger.info(f"📄 Скрипт парсера: {self.parser_script}")
         
         # Проверяем переменные окружения
         self.check_environment()
+        
+    def _determine_parser_script(self):
+        """Автоматическое определение доступного парсера"""
+        if self.parser_mode == 'legacy':
+            return '/app/parser.py'
+        elif self.parser_mode == 'modular':
+            return '/app/parser_new.py'
+        else:  # auto mode
+            # Проверяем доступность модульной системы
+            try:
+                import importlib.util
+                spec = importlib.util.spec_from_file_location("core", "/app/core/__init__.py")
+                if spec and os.path.exists('/app/parser_new.py'):
+                    logger.info("✅ Модульная система доступна - используем parser_new.py")
+                    return '/app/parser_new.py'
+            except Exception as e:
+                logger.debug(f"🔍 Модульная система недоступна: {e}")
+            
+            # Fallback на legacy версию
+            if os.path.exists('/app/parser.py'):
+                logger.info("📦 Используем legacy parser.py")
+                return '/app/parser.py'
+            elif os.path.exists('/app/auto_parser.sh'):
+                logger.info("🔄 Используем auto_parser.sh")
+                return '/app/auto_parser.sh'
+            else:
+                logger.error("❌ Ни один парсер не найден!")
+                return None
         
     def check_environment(self):
         """Проверка переменных окружения"""
@@ -61,6 +94,20 @@ class DNSCryptScheduler:
         # Проверяем настройки Chrome
         chrome_headless = os.getenv('CHROME_HEADLESS', 'true')
         logger.info(f"🌐 Chrome headless: {chrome_headless}")
+        
+        # Проверяем доступность файлов
+        logger.info("📁 Проверка файлов:")
+        files_to_check = [
+            '/app/parser.py',
+            '/app/parser_new.py', 
+            '/app/core/__init__.py',
+            '/app/auto_parser.sh'
+        ]
+        
+        for file_path in files_to_check:
+            exists = os.path.exists(file_path)
+            status = "✅" if exists else "❌"
+            logger.info(f"   {status} {file_path}")
         
     def signal_handler(self, signum, frame):
         """Обработчик сигналов для корректного завершения"""
@@ -116,15 +163,27 @@ class DNSCryptScheduler:
             return False
             
     def run_parser(self):
-        """Запуск парсера"""
-        logger.info("🚀 Запуск парсера DNSCrypt...")
+        """Запуск парсера с поддержкой модульной системы"""
+        if not self.parser_script:
+            logger.error("❌ Парсер не найден!")
+            return False
+            
+        logger.info(f"🚀 Запуск парсера: {self.parser_script}")
         
         try:
             start_time = datetime.now()
             
+            # Определяем команду запуска
+            if self.parser_script.endswith('.sh'):
+                # Bash скрипт
+                cmd = ['bash', self.parser_script]
+            else:
+                # Python скрипт
+                cmd = [sys.executable, self.parser_script]
+            
             # Запускаем парсер
             result = subprocess.run(
-                [sys.executable, self.parser_script],
+                cmd,
                 cwd='/app',
                 capture_output=True,
                 text=True,
@@ -135,8 +194,12 @@ class DNSCryptScheduler:
             
             if result.returncode == 0:
                 logger.info(f"✅ Парсер завершен успешно за {duration}")
+                
+                # Анализируем вывод для получения статистики
+                self._analyze_parser_output(result.stdout)
+                
                 if self.debug_mode:
-                    logger.debug(f"📊 Вывод парсера:\n{result.stdout}")
+                    logger.debug(f"📊 Полный вывод парсера:\n{result.stdout}")
                 else:
                     # В обычном режиме показываем только последние строки
                     stdout_lines = result.stdout.split('\n')
@@ -152,7 +215,7 @@ class DNSCryptScheduler:
                 self.save_last_run_time(start_time)
                 
                 # Создаем краткий отчет о работе scheduler'а
-                self.create_scheduler_report(start_time, duration, True)
+                self.create_scheduler_report(start_time, duration, True, result.stdout)
                 
                 return True
             else:
@@ -172,27 +235,63 @@ class DNSCryptScheduler:
         except Exception as e:
             logger.error(f"❌ Ошибка запуска парсера: {e}")
             return False
+    
+    def _analyze_parser_output(self, output):
+        """Анализ вывода парсера для извлечения статистики"""
+        lines = output.split('\n')
+        stats = {}
+        
+        for line in lines:
+            # Ищем статистику в выводе
+            if 'обработано' in line.lower() or 'processed' in line.lower():
+                logger.info(f"📊 {line.strip()}")
+            elif 'успешно' in line.lower() or 'successful' in line.lower():
+                logger.info(f"✅ {line.strip()}")
+            elif 'github' in line.lower() and ('успешно' in line.lower() or 'success' in line.lower()):
+                logger.info(f"🚀 {line.strip()}")
+            elif 'время выполнения' in line.lower() or 'duration' in line.lower():
+                logger.info(f"⏱️ {line.strip()}")
             
-    def create_scheduler_report(self, start_time, duration, success, error_msg=None):
+    def create_scheduler_report(self, start_time, duration, success, output=None):
         """Создание отчета о работе scheduler'а"""
         try:
             report_file = '/app/output/scheduler_report.txt'
             
             with open(report_file, 'w', encoding='utf-8') as f:
-                f.write("# Отчет о работе DNSCrypt Scheduler\n")
+                f.write("# Отчет о работе DNSCrypt Scheduler v2.0\n")
                 f.write(f"# Дата: {start_time.strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+                f.write(f"Режим парсера: {self.parser_mode}\n")
+                f.write(f"Скрипт парсера: {self.parser_script}\n")
                 f.write(f"Интервал обновления: {self.interval_days} дней\n")
                 f.write(f"Время запуска: {start_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 f.write(f"Длительность: {duration}\n")
                 f.write(f"Статус: {'✅ Успешно' if success else '❌ Ошибка'}\n")
                 
-                if not success and error_msg:
-                    f.write(f"\nОшибка:\n{error_msg}\n")
+                if output:
+                    f.write(f"\nВывод парсера:\n")
+                    # Извлекаем важную информацию из вывода
+                    lines = output.split('\n')
+                    important_lines = []
+                    
+                    for line in lines:
+                        line_lower = line.lower()
+                        if any(keyword in line_lower for keyword in [
+                            'успешно', 'ошибка', 'обработано', 'github', 
+                            'время выполнения', 'файлов обновлено', 
+                            'парсер завершен', 'модульн', 'legacy'
+                        ]):
+                            important_lines.append(line)
+                    
+                    if important_lines:
+                        f.write('\n'.join(important_lines))
+                    else:
+                        # Если важные строки не найдены, показываем последние 20 строк
+                        f.write('\n'.join(lines[-20:]))
                 
                 # Информация о следующем запуске
                 if success:
                     next_run = start_time + timedelta(days=self.interval_days)
-                    f.write(f"Следующий запуск: {next_run.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                    f.write(f"\n\nСледующий запуск: {next_run.strftime('%Y-%m-%d %H:%M:%S')}\n")
                     
         except Exception as e:
             logger.error(f"❌ Ошибка создания отчета scheduler'а: {e}")
@@ -203,9 +302,11 @@ class DNSCryptScheduler:
         now = datetime.now()
         
         logger.info("=" * 60)
-        logger.info("📊 СТАТУС SCHEDULER'А")
+        logger.info("📊 СТАТУС SCHEDULER'А v2.0")
         logger.info("=" * 60)
         logger.info(f"🕐 Текущее время: {now.strftime('%Y-%m-%d %H:%M:%S')}")
+        logger.info(f"⚙️ Режим парсера: {self.parser_mode}")
+        logger.info(f"📄 Скрипт: {self.parser_script}")
         
         if last_run:
             time_since_last = now - last_run
@@ -231,7 +332,7 @@ class DNSCryptScheduler:
         
     def run(self):
         """Основной цикл scheduler'а"""
-        logger.info("🔄 Запуск основного цикла scheduler'а")
+        logger.info("🔄 Запуск основного цикла scheduler'а v2.0")
         
         # Показываем статус при запуске
         self.log_status()
@@ -279,14 +380,15 @@ class DNSCryptScheduler:
                 logger.error(f"❌ Ошибка в основном цикле: {e}")
                 time.sleep(60)  # Ждем минуту при ошибке
                 
-        logger.info("🛑 Scheduler завершен")
+        logger.info("🛑 Scheduler v2.0 завершен")
 
 def main():
     """Основная функция"""
-    logger.info("🌟 Запуск DNSCrypt Scheduler")
+    logger.info("🌟 Запуск DNSCrypt Scheduler v2.0")
     
     # Создаем директории если их нет
     os.makedirs('/app/output', exist_ok=True)
+    os.makedirs('/app/logs', exist_ok=True)
     
     # Создаем и запускаем scheduler
     scheduler = DNSCryptScheduler()

@@ -59,14 +59,43 @@ WORKDIR /app
 # Создаем пользователя parser
 RUN useradd -m -u 1000 parser && \
     mkdir -p /app/output && \
+    mkdir -p /app/logs && \
     chown -R parser:parser /app
 
+# Копируем зависимости и устанавливаем их
 COPY requirements.txt .
-
 RUN python -m pip install --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-COPY parser.py scheduler.py ./
+# ИСПРАВЛЕНИЕ: Копируем ВСЮ модульную систему
+COPY parser.py scheduler.py parser_new.py ./
+COPY core/ ./core/
+COPY file_handlers/ ./file_handlers/
+COPY github/ ./github/
+COPY page_handlers/ ./page_handlers/
+COPY data_handlers/ ./data_handlers/
+COPY extractors/ ./extractors/
+COPY strategies/ ./strategies/
+COPY utils/ ./utils/
+
+# Создаем script для автоматического выбора парсера
+RUN echo '#!/bin/bash\n\
+# Автоматический выбор парсера: модульный или legacy\n\
+echo "🚀 Docker Container: Автоматический выбор парсера"\n\
+echo "========================================"\n\
+\n\
+# Проверяем доступность модульной системы\n\
+if [ -f "parser_new.py" ] && python -c "from core import DNSCryptParser" 2>/dev/null; then\n\
+    echo "✅ Модульная система доступна - используем parser_new.py"\n\
+    exec python parser_new.py "$@"\n\
+elif [ -f "parser.py" ]; then\n\
+    echo "📦 Используем legacy parser.py"\n\
+    exec python parser.py "$@"\n\
+else\n\
+    echo "❌ Ни один парсер не найден!"\n\
+    exit 1\n\
+fi' > /app/auto_parser.sh && \
+    chmod +x /app/auto_parser.sh
 
 # ИСПРАВЛЕНИЕ: Устанавливаем права как root, затем переключаемся на parser
 RUN chown -R parser:parser /app && \
@@ -74,5 +103,5 @@ RUN chown -R parser:parser /app && \
 
 USER parser
 
-# ИСПРАВЛЕНИЕ: Убираем проблемные команды из runtime
+# ИСПРАВЛЕНИЕ: Используем автоматический выбор парсера
 CMD ["python", "scheduler.py"]

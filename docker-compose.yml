@@ -4,10 +4,12 @@ services:
     container_name: dnscrypt-parser-scheduler
     environment:
       - DISPLAY=:99
+      - PARSER_MODE=auto  # auto, modular, legacy
     env_file:
       - .env
     volumes:
       - ./output:/app/output:rw
+      - ./logs:/app/logs:rw
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
     network_mode: host
     restart: unless-stopped
@@ -18,6 +20,7 @@ services:
         chmod 1777 /tmp/.X11-unix 2>/dev/null || true &&
         Xvfb :99 -screen 0 1920x1080x24 -ac +extension GLX +render -noreset &
         sleep 3 &&
+        echo '🚀 Запуск DNSCrypt Parser Scheduler' &&
         python scheduler.py
       "
 
@@ -26,10 +29,12 @@ services:
     container_name: dnscrypt-parser-once
     environment:
       - DISPLAY=:99
+      - PARSER_MODE=auto
     env_file:
       - .env
     volumes:
       - ./output:/app/output:rw
+      - ./logs:/app/logs:rw
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
     network_mode: host
     profiles:
@@ -41,5 +46,60 @@ services:
         chmod 1777 /tmp/.X11-unix 2>/dev/null || true &&
         Xvfb :99 -screen 0 1920x1080x24 -ac +extension GLX +render -noreset &
         sleep 3 &&
+        echo '🎯 Одноразовый запуск DNSCrypt Parser' &&
+        ./auto_parser.sh
+      "
+
+  # Отдельный сервис для модульного парсера
+  dnscrypt-parser-modular:
+    build: .
+    container_name: dnscrypt-parser-modular
+    environment:
+      - DISPLAY=:99
+      - PARSER_MODE=modular
+    env_file:
+      - .env
+    volumes:
+      - ./output:/app/output:rw
+      - ./logs:/app/logs:rw
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    network_mode: host
+    profiles:
+      - modular
+    user: "1000:1000"
+    command: >
+      sh -c "
+        mkdir -p /tmp/.X11-unix && 
+        chmod 1777 /tmp/.X11-unix 2>/dev/null || true &&
+        Xvfb :99 -screen 0 1920x1080x24 -ac +extension GLX +render -noreset &
+        sleep 3 &&
+        echo '🚀 Запуск модульного парсера v2.0' &&
+        python parser_new.py
+      "
+
+  # Отдельный сервис для legacy парсера
+  dnscrypt-parser-legacy:
+    build: .
+    container_name: dnscrypt-parser-legacy
+    environment:
+      - DISPLAY=:99
+      - PARSER_MODE=legacy
+    env_file:
+      - .env
+    volumes:
+      - ./output:/app/output:rw
+      - ./logs:/app/logs:rw
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    network_mode: host
+    profiles:
+      - legacy
+    user: "1000:1000"
+    command: >
+      sh -c "
+        mkdir -p /tmp/.X11-unix && 
+        chmod 1777 /tmp/.X11-unix 2>/dev/null || true &&
+        Xvfb :99 -screen 0 1920x1080x24 -ac +extension GLX +render -noreset &
+        sleep 3 &&
+        echo '📦 Запуск legacy парсера' &&
         python parser.py
       "
