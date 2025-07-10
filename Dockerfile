@@ -67,8 +67,8 @@ COPY requirements.txt .
 RUN python -m pip install --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# ИСПРАВЛЕНИЕ: Копируем ВСЮ модульную систему
-COPY parser.py scheduler.py parser_new.py ./
+# ИСПРАВЛЕНИЕ: Копируем модульную систему без удаленного parser.py
+COPY scheduler.py parser_new.py ./
 COPY core/ ./core/
 COPY file_handlers/ ./file_handlers/
 COPY github/ ./github/
@@ -88,11 +88,8 @@ echo "========================================"\n\
 if [ -f "parser_new.py" ] && python -c "from core import DNSCryptParser" 2>/dev/null; then\n\
     echo "✅ Модульная система доступна - используем parser_new.py"\n\
     exec python parser_new.py "$@"\n\
-elif [ -f "parser.py" ]; then\n\
-    echo "📦 Используем legacy parser.py"\n\
-    exec python parser.py "$@"\n\
 else\n\
-    echo "❌ Ни один парсер не найден!"\n\
+    echo "❌ Модульная система недоступна!"\n\
     exit 1\n\
 fi' > /app/auto_parser.sh && \
     chmod +x /app/auto_parser.sh
@@ -103,5 +100,5 @@ RUN chown -R parser:parser /app && \
 
 USER parser
 
-# ИСПРАВЛЕНИЕ: Используем автоматический выбор парсера
+# Используем scheduler с модульной системой
 CMD ["python", "scheduler.py"]
