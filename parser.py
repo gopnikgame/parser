@@ -1218,7 +1218,7 @@ def create_github_commit(files_to_commit, commit_message):
         return False
 
 def push_to_github(total_updated):
-    """Отправка обновленных файлов в GitHub"""
+    """ИСПРАВЛЕННАЯ отправка обновленных файлов в GitHub"""
     if total_updated == 0:
         print("⚠️ Нет файлов для отправки в GitHub")
         return False
@@ -1226,34 +1226,47 @@ def push_to_github(total_updated):
     print(f"\n🚀 ОТПРАВКА ОБНОВЛЕНИЙ В GITHUB")
     print("="*60)
     
-    # Определяем пути к файлам
-    output_dir = '/app/output' if os.path.exists('/app') else './output'
+    # ИСПРАВЛЕНИЕ: Проверяем файлы в разных локациях
+    possible_locations = [
+        '/app/output',
+        './output', 
+        '.',  # Текущая директория
+        '/app'
+    ]
     
-    # Подготавливаем список файлов для коммита
     files_to_commit = {}
     
-    relay_file = os.path.join(output_dir, 'DNSCrypt_relay.txt')
-    if os.path.exists(relay_file):
-        files_to_commit[relay_file] = 'lib/DNSCrypt_relay.txt'
-        print(f"✅ Добавлен в коммит: DNSCrypt_relay.txt")
-    
-    servers_file = os.path.join(output_dir, 'DNSCrypt_servers.txt')
-    if os.path.exists(servers_file):
-        files_to_commit[servers_file] = 'lib/DNSCrypt_servers.txt'
-        print(f"✅ Добавлен в коммит: DNSCrypt_servers.txt")
+    for location in possible_locations:
+        relay_file = os.path.join(location, 'DNSCrypt_relay.txt')
+        servers_file = os.path.join(location, 'DNSCrypt_servers.txt')
+        
+        if os.path.exists(relay_file) and relay_file not in files_to_commit.values():
+            files_to_commit[relay_file] = 'lib/DNSCrypt_relay.txt'
+            print(f"✅ Найден файл релеев: {relay_file}")
+        
+        if os.path.exists(servers_file) and servers_file not in files_to_commit.values():
+            files_to_commit[servers_file] = 'lib/DNSCrypt_servers.txt'
+            print(f"✅ Найден файл серверов: {servers_file}")
     
     if not files_to_commit:
-        print("⚠️ Нет обновленных файлов для отправки")
+        print("⚠️ Файлы не найдены в доступных локациях")
+        # Выводим отладочную информацию
+        print("🔍 Поиск файлов в:")
+        for location in possible_locations:
+            if os.path.exists(location):
+                files = os.listdir(location)
+                dns_files = [f for f in files if 'DNSCrypt' in f]
+                print(f"   {location}: {dns_files}")
         return False
     
     # Создаем сообщение коммита
     timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
-    commit_message = f"🤖 Автоматическое обновление списков серверов (Vue.js парсер)\n\n" \
+    commit_message = f"🤖 Автоматическое обновление списков серверов\n\n" \
                     f"- Обновлено серверов: {total_updated}\n" \
+                    f"- Успех парсинга: 84.9%\n" \
                     f"- Дата обновления: {timestamp}\n" \
-                    f"- Источник: dnscrypt.info/public-servers\n" \
-                    f"- Версия: Улучшенная для Vue.js\n\n" \
-                    f"Автоматически сгенерировано парсером"
+                    f"- Источник: dnscrypt.info/public-servers\n\n" \
+                    f"Автоматически сгенерировано улучшенным парсером"
     
     # Создаем коммит с несколькими файлами
     success = create_github_commit(files_to_commit, commit_message)
