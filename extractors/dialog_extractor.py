@@ -358,7 +358,7 @@ class AdvancedDialogExtractor:
                     r'(?:Provider|Organization)[\s:]*([^\n\r]+)',
                     r'Provided by[\s:]*([^\n\r]+)'
                 ]
-            ]
+            }
             
             # Очищаем содержимое от HTML тегов
             clean_content = re.sub(r'<[^>]+>', ' ', dialog_content)
