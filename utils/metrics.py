@@ -1,7 +1,8 @@
-# Система метрик и мониторинга парсера
+# Система метрик и мониторинга парсера - ИСПРАВЛЕННАЯ ВЕРСИЯ v2.1
 import time
 import json
 import os
+import tempfile
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field, asdict
@@ -95,7 +96,7 @@ class SessionMetrics:
         }
 
 class ParsingMetrics:
-    """Система метрик парсера"""
+    """Система метрик парсера - ИСПРАВЛЕННАЯ ВЕРСИЯ v2.1"""
     
     def __init__(self, output_dir: str = "./output"):
         self.output_dir = output_dir
@@ -103,36 +104,77 @@ class ParsingMetrics:
         self.current_session: Optional[SessionMetrics] = None
         self.historical_metrics: List[SessionMetrics] = []
         
-        # Создаем директорию если не существует
-        self._ensure_directory(output_dir)
+        # Безопасная инициализация директорий
+        self._safe_initialize_directories()
         
-        # Загружаем исторические метрики
-        self._load_historical_metrics()
+        # Загружаем исторические метрики если возможно
+        if self.metrics_file:
+            self._load_historical_metrics()
     
-    def _ensure_directory(self, directory: str):
-        """Безопасное создание директории с обработкой ошибок прав доступа"""
+    def _safe_initialize_directories(self):
+        """Безопасная инициализация директорий с множественными fallback'ами"""
+        original_dir = self.output_dir
+        
+        # Попытка 1: Основная директория
+        if self._try_create_directory(self.output_dir):
+            print(f"📁 Основная директория готова: {self.output_dir}")
+            return
+        
+        # Попытка 2: Альтернативная директория в текущей папке
+        alt_dir = "./dnscrypt_output"
+        if self._try_create_directory(alt_dir):
+            print(f"📁 Альтернативная директория: {alt_dir}")
+            self.output_dir = alt_dir
+            self.metrics_file = os.path.join(alt_dir, "parsing_metrics.json")
+            return
+        
+        # Попытка 3: Временная директория системы
+        try:
+            temp_dir = os.path.join(tempfile.gettempdir(), "dnscrypt_parser_metrics")
+            if self._try_create_directory(temp_dir):
+                print(f"📁 Временная директория: {temp_dir}")
+                self.output_dir = temp_dir
+                self.metrics_file = os.path.join(temp_dir, "parsing_metrics.json")
+                return
+        except Exception as e:
+            print(f"⚠️ Ошибка создания временной директории: {e}")
+        
+        # Попытка 4: Домашняя директория пользователя
+        try:
+            home_dir = os.path.join(os.path.expanduser("~"), "dnscrypt_parser")
+            if self._try_create_directory(home_dir):
+                print(f"📁 Домашняя директория: {home_dir}")
+                self.output_dir = home_dir
+                self.metrics_file = os.path.join(home_dir, "parsing_metrics.json")
+                return
+        except Exception as e:
+            print(f"⚠️ Ошибка создания директории в домашней папке: {e}")
+        
+        # Попытка 5: Только память (без сохранения)
+        print("⚠️ Не удалось создать ни одну директорию для метрик")
+        print("💾 Метрики будут сохраняться только в памяти")
+        self.output_dir = None
+        self.metrics_file = None
+    
+    def _try_create_directory(self, directory: str) -> bool:
+        """Попытка создания директории с проверкой записи"""
         try:
             os.makedirs(directory, exist_ok=True)
-            print(f"📁 Директория создана/проверена: {directory}")
-        except PermissionError as e:
-            print(f"⚠️ Ошибка прав доступа для {directory}: {e}")
-            # Пробуем создать в домашней директории пользователя
-            import tempfile
-            fallback_dir = os.path.join(tempfile.gettempdir(), "dnscrypt_parser")
-            try:
-                os.makedirs(fallback_dir, exist_ok=True)
-                self.output_dir = fallback_dir
-                self.metrics_file = os.path.join(fallback_dir, "parsing_metrics.json")
-                print(f"📁 Используется альтернативная директория: {fallback_dir}")
-            except Exception as fallback_error:
-                print(f"❌ Критическая ошибка создания директории: {fallback_error}")
-                # Отключаем сохранение метрик если ничего не работает
-                self.output_dir = None
-                self.metrics_file = None
+            
+            # Тестируем возможность записи
+            test_file = os.path.join(directory, "test_write.tmp")
+            with open(test_file, 'w') as f:
+                f.write("test")
+            os.remove(test_file)
+            
+            return True
+            
+        except (PermissionError, OSError, IOError) as e:
+            print(f"⚠️ Не удалось создать/использовать {directory}: {e}")
+            return False
         except Exception as e:
-            print(f"❌ Неожиданная ошибка создания директории {directory}: {e}")
-            self.output_dir = None
-            self.metrics_file = None
+            print(f"⚠️ Неожиданная ошибка с {directory}: {e}")
+            return False
     
     def start_session(self, session_id: str = None) -> str:
         """Начало новой сессии метрик"""
@@ -145,6 +187,9 @@ class ParsingMetrics:
         )
         
         print(f"📊 Начата сессия метрик: {session_id}")
+        if not self.metrics_file:
+            print("⚠️ Метрики сохраняются только в памяти (проблемы с правами)")
+        
         return session_id
     
     def record_server_extraction(
@@ -184,7 +229,7 @@ class ParsingMetrics:
         self.current_session.finalize()
         self.historical_metrics.append(self.current_session)
         
-        # Сохраняем метрики
+        # Сохраняем метрики если возможно
         self._save_metrics()
         
         session = self.current_session
@@ -210,11 +255,12 @@ class ParsingMetrics:
             return "📊 Нет данных для отчета"
         
         report = f"""
-📊 ДЕТАЛЬНЫЙ ОТЧЕТ ПАРСИНГА
+📊 ДЕТАЛЬНЫЙ ОТЧЕТ ПАРСИНГА v2.1
 {'='*60}
 🆔 Сессия: {session.session_id}
 ⏰ Время: {session.start_time} - {session.end_time or 'В процессе'}
 ⏱️ Длительность: {session.total_duration:.1f} сек
+💾 Сохранение: {'✅ Файл' if self.metrics_file else '⚠️ Только память'}
 
 🎯 ОБЩАЯ СТАТИСТИКА:
    Всего серверов: {session.total_servers}
@@ -288,36 +334,38 @@ class ParsingMetrics:
     
     def _load_historical_metrics(self):
         """Загрузка исторических метрик"""
-        if self.metrics_file and os.path.exists(self.metrics_file):
-            try:
-                with open(self.metrics_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
+        if not self.metrics_file or not os.path.exists(self.metrics_file):
+            return
+        
+        try:
+            with open(self.metrics_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            self.historical_metrics = []
+            for session_data in data.get('sessions', []):
+                # Восстанавливаем SessionMetrics из JSON
+                session = SessionMetrics(**{
+                    k: v for k, v in session_data.items() 
+                    if k != 'server_metrics'
+                })
                 
-                self.historical_metrics = []
-                for session_data in data.get('sessions', []):
-                    # Восстанавливаем SessionMetrics из JSON
-                    session = SessionMetrics(**{
-                        k: v for k, v in session_data.items() 
-                        if k != 'server_metrics'
-                    })
-                    
-                    # Восстанавливаем метрики серверов
-                    for metric_data in session_data.get('server_metrics', []):
-                        metric = ServerExtractionMetric(**metric_data)
-                        session.server_metrics.append(metric)
-                    
-                    self.historical_metrics.append(session)
+                # Восстанавливаем метрики серверов
+                for metric_data in session_data.get('server_metrics', []):
+                    metric = ServerExtractionMetric(**metric_data)
+                    session.server_metrics.append(metric)
                 
-                print(f"📊 Загружено {len(self.historical_metrics)} исторических сессий")
-                
-            except Exception as e:
-                print(f"⚠️ Не удалось загрузить исторические метрики: {e}")
-                self.historical_metrics = []
+                self.historical_metrics.append(session)
+            
+            print(f"📊 Загружено {len(self.historical_metrics)} исторических сессий")
+            
+        except Exception as e:
+            print(f"⚠️ Не удалось загрузить исторические метрики: {e}")
+            self.historical_metrics = []
     
     def _save_metrics(self):
-        """Сохранение метрик в файл"""
+        """Безопасное сохранение метрик в файл"""
         if not self.metrics_file:
-            print("⚠️ Сохранение метрик отключено из-за проблем с правами доступа")
+            print("⚠️ Сохранение метрик отключено (нет доступной директории)")
             return
         
         try:
@@ -326,25 +374,62 @@ class ParsingMetrics:
                 "sessions": [asdict(session) for session in self.historical_metrics]
             }
             
-            with open(self.metrics_file, 'w', encoding='utf-8') as f:
+            # Создаем временный файл для атомарной записи
+            temp_file = self.metrics_file + ".tmp"
+            with open(temp_file, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
             
+            # Атомарно перемещаем файл
+            if os.path.exists(self.metrics_file):
+                backup_file = self.metrics_file + ".backup"
+                if os.path.exists(backup_file):
+                    os.remove(backup_file)
+                os.rename(self.metrics_file, backup_file)
+            
+            os.rename(temp_file, self.metrics_file)
             print(f"📊 Метрики сохранены в {self.metrics_file}")
             
         except Exception as e:
             print(f"⚠️ Не удалось сохранить метрики: {e}")
+            # Пытаемся сохранить в альтернативное место
+            self._save_metrics_fallback()
+    
+    def _save_metrics_fallback(self):
+        """Fallback сохранение в временную директорию"""
+        try:
+            fallback_file = os.path.join(tempfile.gettempdir(), "dnscrypt_metrics.json")
+            data = {
+                "last_updated": datetime.now().isoformat(),
+                "sessions": [asdict(session) for session in self.historical_metrics]
+            }
+            
+            with open(fallback_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            
+            print(f"📊 Метрики сохранены в резервное место: {fallback_file}")
+            
+        except Exception as e:
+            print(f"❌ Полный сбой сохранения метрик: {e}")
     
     def export_csv_report(self, filename: str = None) -> str:
-        """Экспорт отчета в CSV формат"""
+        """Безопасный экспорт отчета в CSV формат"""
         if not self.output_dir:
-            print("⚠️ Экспорт CSV отключен из-за проблем с правами доступа")
-            return ""
-        
-        if filename is None:
-            filename = os.path.join(self.output_dir, f"parsing_report_{int(time.time())}.csv")
+            print("⚠️ Экспорт CSV ограничен (нет доступной директории)")
+            # Пытаемся сохранить в временную директорию
+            if not filename:
+                filename = os.path.join(tempfile.gettempdir(), f"parsing_report_{int(time.time())}.csv")
+        else:
+            if not filename:
+                filename = os.path.join(self.output_dir, f"parsing_report_{int(time.time())}.csv")
         
         try:
             import csv
+            
+            # Проверяем возможность записи в директорию
+            test_dir = os.path.dirname(filename)
+            if not self._try_create_directory(test_dir):
+                # Fallback в временную директорию
+                filename = os.path.join(tempfile.gettempdir(), f"parsing_report_{int(time.time())}.csv")
             
             with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
                 writer = csv.writer(csvfile)
@@ -377,44 +462,85 @@ class ParsingMetrics:
             return ""
 
 class ParsingCache:
-    """Система кэширования для парсера"""
+    """Система кэширования для парсера - ИСПРАВЛЕННАЯ ВЕРСИЯ v2.1"""
     
     def __init__(self, cache_dir: str = "./output/cache"):
+        self.original_cache_dir = cache_dir
         self.cache_dir = cache_dir
-        self.cache_file = os.path.join(cache_dir, "server_cache.json")
+        self.cache_file = None
         self.cache_duration = 3600 * 24  # 24 часа
         self.cache = {}
-        self.cache_enabled = True
+        self.cache_enabled = False
         
-        # Безопасное создание директории кэша
-        self._ensure_cache_directory()
+        # Безопасная инициализация кэша
+        self._safe_initialize_cache()
         
-        if self.cache_enabled:
+        if self.cache_enabled and self.cache_file:
             self._load_cache()
     
-    def _ensure_cache_directory(self):
-        """Безопасное создание директории кэша с обработкой ошибок прав доступа"""
+    def _safe_initialize_cache(self):
+        """Безопасная инициализация кэша с множественными fallback'ами"""
+        # Попытка 1: Оригинальная директория
+        if self._try_setup_cache_dir(self.original_cache_dir):
+            return
+        
+        # Попытка 2: Альтернативная директория кэша
+        alt_cache = "./dnscrypt_cache"
+        if self._try_setup_cache_dir(alt_cache):
+            return
+        
+        # Попытка 3: Временная директория
         try:
-            os.makedirs(self.cache_dir, exist_ok=True)
-            print(f"💾 Директория кэша создана/проверена: {self.cache_dir}")
-        except PermissionError as e:
-            print(f"⚠️ Ошибка прав доступа для директории кэша {self.cache_dir}: {e}")
-            # Пробуем создать в временной директории
-            import tempfile
-            fallback_dir = os.path.join(tempfile.gettempdir(), "dnscrypt_parser_cache")
-            try:
-                os.makedirs(fallback_dir, exist_ok=True)
-                self.cache_dir = fallback_dir
-                self.cache_file = os.path.join(fallback_dir, "server_cache.json")
-                print(f"💾 Используется альтернативная директория кэша: {fallback_dir}")
-            except Exception as fallback_error:
-                print(f"❌ Критическая ошибка создания директории кэша: {fallback_error}")
-                print("💾 Кэширование отключено")
-                self.cache_enabled = False
+            temp_cache = os.path.join(tempfile.gettempdir(), "dnscrypt_parser_cache")
+            if self._try_setup_cache_dir(temp_cache):
+                return
         except Exception as e:
-            print(f"❌ Неожиданная ошибка создания директории кэша {self.cache_dir}: {e}")
-            print("💾 Кэширование отключено")
-            self.cache_enabled = False
+            print(f"⚠️ Ошибка создания временного кэша: {e}")
+        
+        # Попытка 4: Домашняя директория
+        try:
+            home_cache = os.path.join(os.path.expanduser("~"), "dnscrypt_cache")
+            if self._try_setup_cache_dir(home_cache):
+                return
+        except Exception as e:
+            print(f"⚠️ Ошибка создания кэша в домашней директории: {e}")
+        
+        # Все попытки провалились
+        print("❌ Кэширование полностью отключено (все директории недоступны)")
+        self.cache_enabled = False
+        self.cache_dir = None
+        self.cache_file = None
+    
+    def _try_setup_cache_dir(self, cache_dir: str) -> bool:
+        """Попытка настройки директории кэша"""
+        try:
+            os.makedirs(cache_dir, exist_ok=True)
+            
+            # Тестируем запись
+            test_file = os.path.join(cache_dir, "cache_test.tmp")
+            with open(test_file, 'w') as f:
+                f.write('{"test": true}')
+            
+            # Тестируем чтение
+            with open(test_file, 'r') as f:
+                json.load(f)
+            
+            os.remove(test_file)
+            
+            # Успешно!
+            self.cache_dir = cache_dir
+            self.cache_file = os.path.join(cache_dir, "server_cache.json")
+            self.cache_enabled = True
+            
+            print(f"💾 Кэш настроен: {cache_dir}")
+            return True
+            
+        except (PermissionError, OSError, IOError) as e:
+            print(f"⚠️ Кэш недоступен {cache_dir}: {e}")
+            return False
+        except Exception as e:
+            print(f"⚠️ Неожиданная ошибка кэша {cache_dir}: {e}")
+            return False
     
     def get_cached_server_info(self, server_name: str) -> Optional[Dict[str, Any]]:
         """Получение кэшированной информации о сервере"""
@@ -467,7 +593,9 @@ class ParsingCache:
         if not self.cache_enabled:
             return {
                 "cache_enabled": False,
-                "message": "Кэширование отключено из-за проблем с правами доступа"
+                "message": "Кэширование отключено из-за проблем с правами доступа",
+                "attempted_dir": self.original_cache_dir,
+                "actual_dir": self.cache_dir
             }
         
         current_time = time.time()
@@ -487,12 +615,13 @@ class ParsingCache:
             "expired_entries": expired_entries,
             "cache_hit_rate": 0,  # Будет обновляться во время использования
             "cache_duration_hours": self.cache_duration / 3600,
-            "cache_directory": self.cache_dir
+            "cache_directory": self.cache_dir,
+            "cache_file": self.cache_file
         }
     
     def _load_cache(self):
-        """Загрузка кэша из файла"""
-        if not self.cache_enabled or not os.path.exists(self.cache_file):
+        """Безопасная загрузка кэша из файла"""
+        if not self.cache_enabled or not self.cache_file or not os.path.exists(self.cache_file):
             return
         
         try:
@@ -504,12 +633,31 @@ class ParsingCache:
             self.cache = {}
     
     def _save_cache(self):
-        """Сохранение кэша в файл"""
-        if not self.cache_enabled:
+        """Безопасное сохранение кэша в файл"""
+        if not self.cache_enabled or not self.cache_file:
             return
         
         try:
-            with open(self.cache_file, 'w', encoding='utf-8') as f:
+            # Атомарная запись через временный файл
+            temp_file = self.cache_file + ".tmp"
+            with open(temp_file, 'w', encoding='utf-8') as f:
                 json.dump(self.cache, f, indent=2, ensure_ascii=False)
+            
+            # Атомарное перемещение
+            if os.path.exists(self.cache_file):
+                backup_file = self.cache_file + ".backup"
+                if os.path.exists(backup_file):
+                    os.remove(backup_file)
+                os.rename(self.cache_file, backup_file)
+            
+            os.rename(temp_file, self.cache_file)
+            
         except Exception as e:
             print(f"⚠️ Не удалось сохранить кэш: {e}")
+            # Очищаем временные файлы при ошибке
+            temp_file = self.cache_file + ".tmp"
+            if os.path.exists(temp_file):
+                try:
+                    os.remove(temp_file)
+                except:
+                    pass

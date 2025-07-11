@@ -1,413 +1,326 @@
-# Продвинутый экстрактор диалогов с множественными стратегиями
+"""
+Извлечение данных из диалогов - ПОЛНОСТЬЮ ПЕРЕПИСАН для Vue.js v2.1
+"""
 import time
-import random
+import re
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException, NoSuchElementException, WebDriverException
 from selenium.webdriver.common.action_chains import ActionChains
-from selenium.webdriver.common.keys import Keys
-from selenium.common.exceptions import TimeoutException, WebDriverException
-from typing import Optional, Dict, Any, List
 
-# Используем относительный импорт для лучшей совместимости
-try:
-    from ..core.config import ParserConfig
-except ImportError:
-    # Fallback для случаев когда относительный импорт не работает
-    import sys
-    from pathlib import Path
-    sys.path.append(str(Path(__file__).parent.parent))
-    from core.config import ParserConfig
-
-class AdvancedDialogExtractor:
-    """Продвинутый экстрактор диалогов с множественными стратегиями"""
+class DialogExtractor:
+    """Извлечение данных из диалогов - ОБНОВЛЕННАЯ ВЕРСИЯ v2.1 для Vue.js"""
     
-    def __init__(self, driver: webdriver.Chrome, config: ParserConfig):
+    def __init__(self, driver: webdriver.Chrome):
         self.driver = driver
-        self.config = config
-        self.extraction_stats = {
-            'attempts': 0,
-            'successes': 0,
-            'timeouts': 0,
-            'click_failures': 0,
-            'dialog_failures': 0
+        
+        # Обновленные селекторы для Vue.js/Vuetify приложения
+        self.selectors = {
+            # Кнопки и триггеры для открытия диалогов
+            'dialog_triggers': [
+                'button[data-testid*="dialog"]',
+                '.v-btn[aria-haspopup="dialog"]',
+                'button[aria-label*="info" i]',
+                'button[aria-label*="detail" i]',
+                'button[title*="info" i]',
+                'button[title*="detail" i]',
+                '.v-btn[data-action="show-details"]',
+                '.server-info-btn',
+                '.details-btn',
+                'button.info-button',
+                '[role="button"][aria-describedby]',
+                '.v-data-table__expand-icon',
+                '.expand-btn'
+            ],
+            
+            # Диалоги и модальные окна
+            'dialogs': [
+                '.v-dialog',
+                '.v-overlay__content',
+                '.v-menu__content',
+                '.modal',
+                '.dialog',
+                '[role="dialog"]',
+                '.v-card[aria-modal="true"]',
+                '.popup',
+                '.overlay'
+            ],
+            
+            # Содержимое диалогов
+            'dialog_content': [
+                '.v-dialog .v-card-text',
+                '.v-dialog .v-card__text',
+                '.v-overlay__content .v-card-text',
+                '.v-menu__content .v-list',
+                '.modal-body',
+                '.dialog-content',
+                '.popup-content'
+            ],
+            
+            # Строки таблицы данных
+            'table_rows': [
+                '.v-data-table tbody tr',
+                '.v-datatable tbody tr',
+                'table tbody tr',
+                '.data-table tbody tr',
+                'tr[data-item]',
+                'tr[class*="row"]'
+            ],
+            
+            # Ячейки с серверными данными
+            'server_cells': [
+                'td[data-label*="server" i]',
+                'td[data-field*="name" i]',
+                'td.server-name',
+                'td.name-cell',
+                'td:first-child',
+                'td[class*="name"]'
+            ],
+            
+            # Закрытие диалогов
+            'dialog_close': [
+                '.v-dialog .v-btn[aria-label*="close" i]',
+                '.v-overlay .v-btn[data-dismiss]',
+                '.v-dialog .v-icon[aria-label*="close" i]',
+                '.modal .close',
+                '.dialog .close-btn',
+                '[aria-label="Close"]',
+                '.v-overlay__scrim'
+            ]
+        }
+        
+        # Паттерны для извлечения данных
+        self.data_patterns = {
+            'server_name': [
+                r'Server:\s*([^\n\r]+)',
+                r'Name:\s*([^\n\r]+)',
+                r'Hostname:\s*([^\n\r]+)',
+                r'^([a-zA-Z0-9\-_.]+)(?:\s|$)',
+                r'([a-zA-Z0-9\-_.]+\.(?:com|org|net|info|io|me|co))',
+            ],
+            'ip_address': [
+                r'IP:\s*([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})',
+                r'Address:\s*([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})',
+                r'([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})',
+            ],
+            'protocol': [
+                r'Protocol:\s*(DNSCrypt|DoH|DoT)',
+                r'Type:\s*(DNSCrypt|DoH|DoT)',
+                r'(DNSCrypt|DNS-over-HTTPS|DNS-over-TLS)',
+            ]
         }
     
-    def extract_server_info_smart(self, row, server_name: str, retry_count: int = None) -> Optional[Dict[str, Any]]:
-        """Умное извлечение информации о сервере с множественными попытками"""
-        if retry_count is None:
-            retry_count = self.config.MAX_RETRIES
-            
-        self.extraction_stats['attempts'] += 1
+    def extract_all_servers(self, max_servers: int = 200) -> list:
+        """Извлечение всех серверов с улучшенным алгоритмом"""
+        print("🔍 Начинаем извлечение серверов (улучшенная версия v2.1)...")
         
-        for attempt in range(retry_count):
-            try:
-                print(f"🔄 Попытка {attempt + 1}/{retry_count} для {server_name}")
-                
-                # Проверяем видимость строки
-                if not self._ensure_row_visible(row):
-                    continue
-                
-                # Находим кликабельный элемент  
-                clickable_element = self._find_clickable_element(row)
-                if not clickable_element:
-                    continue
-                
-                # Выполняем умный клик
-                if not self._smart_click(clickable_element, attempt):
-                    continue
-                
-                # Ищем и извлекаем диалог
-                dialog_content = self._extract_dialog_content()
-                if dialog_content:
-                    self._close_dialog()
-                    
-                    # Парсим информацию
-                    info = self._parse_server_info(dialog_content, server_name)
-                    if info and info.get('ip'):
-                        self.extraction_stats['successes'] += 1
-                        return info
-                
-                # Если не получилось - делаем экспоненциальную задержку
-                delay = self.config.RETRY_DELAY_BASE * (2 ** attempt) + random.uniform(0.5, 1.5)
-                time.sleep(delay)
-                
-            except Exception as e:
-                print(f"⚠️ Ошибка на попытке {attempt + 1} для {server_name}: {e}")
-                if attempt < retry_count - 1:
-                    time.sleep(self.config.RETRY_DELAY_BASE * (attempt + 1))
+        servers_data = []
+        processed_servers = set()
         
-        print(f"❌ Все попытки исчерпаны для {server_name}")
-        return None
-    
-    def _ensure_row_visible(self, row) -> bool:
-        """Обеспечение видимости строки"""
         try:
-            if not row.is_displayed():
-                # Прокручиваем к элементу
-                self.driver.execute_script(
-                    "arguments[0].scrollIntoView({block: 'center', behavior: 'smooth'});", 
-                    row
-                )
-                time.sleep(random.uniform(1, 2))
-                
-                # Проверяем еще раз
-                if not row.is_displayed():
-                    return False
+            # Метод 1: Прямое извлечение из таблицы
+            table_servers = self._extract_from_table()
+            for server in table_servers:
+                server_key = f"{server.get('name', '')}_{server.get('ip', '')}"
+                if server_key not in processed_servers:
+                    servers_data.append(server)
+                    processed_servers.add(server_key)
             
-            return True
+            print(f"📊 Извлечено из таблицы: {len(table_servers)} серверов")
+            
+            # Метод 2: Извлечение через диалоги/попапы
+            if len(servers_data) < 50:  # Если мало данных, пробуем диалоги
+                dialog_servers = self._extract_via_dialogs(max_servers - len(servers_data))
+                for server in dialog_servers:
+                    server_key = f"{server.get('name', '')}_{server.get('ip', '')}"
+                    if server_key not in processed_servers:
+                        servers_data.append(server)
+                        processed_servers.add(server_key)
+                
+                print(f"📊 Извлечено через диалоги: {len(dialog_servers)} серверов")
+            
+            # Метод 3: JavaScript извлечение из Vue данных
+            if len(servers_data) < 50:
+                js_servers = self._extract_via_javascript()
+                for server in js_servers:
+                    server_key = f"{server.get('name', '')}_{server.get('ip', '')}"
+                    if server_key not in processed_servers:
+                        servers_data.append(server)
+                        processed_servers.add(server_key)
+                
+                print(f"📊 Извлечено через JavaScript: {len(js_servers)} серверов")
+            
+            print(f"✅ Общее количество извлеченных серверов: {len(servers_data)}")
+            return servers_data[:max_servers]
             
         except Exception as e:
-            print(f"⚠️ Ошибка обеспечения видимости: {e}")
-            return False
+            print(f"❌ Критическая ошибка извлечения серверов: {e}")
+            return []
     
-    def _find_clickable_element(self, row):
-        """Поиск кликабельного элемента с множественными стратегиями"""
+    def _extract_from_table(self) -> list:
+        """Прямое извлечение данных из таблицы"""
+        servers = []
+        
         try:
-            cells = row.find_elements(By.TAG_NAME, "td")
-            if len(cells) < 1:
-                return None
-            
-            name_cell = cells[0]
-            server_name = name_cell.text.strip()
-            
-            if not server_name or server_name in ["No data available", "loading"]:
-                return None
-            
-            # Стратегии поиска кликабельного элемента
-            click_strategies = [
-                # Vuetify компоненты
-                lambda: name_cell.find_element(By.CSS_SELECTOR, ".v-btn"),
-                lambda: name_cell.find_element(By.CSS_SELECTOR, "[role='button']"),
-                lambda: name_cell.find_element(By.CSS_SELECTOR, ".v-chip"),
-                
-                # HTML элементы
-                lambda: name_cell.find_element(By.CSS_SELECTOR, "span[title]"),
-                lambda: name_cell.find_element(By.CSS_SELECTOR, "span"),
-                lambda: name_cell.find_element(By.CSS_SELECTOR, "a"),
-                lambda: name_cell.find_element(By.CSS_SELECTOR, "button"),
-                
-                # Атрибуты
-                lambda: name_cell.find_element(By.CSS_SELECTOR, "*[onclick]"),
-                lambda: name_cell.find_element(By.CSS_SELECTOR, "*[data-toggle]"),
-                lambda: name_cell.find_element(By.CSS_SELECTOR, "*[aria-expanded]"),
-                
-                # Fallback - сама ячейка
-                lambda: name_cell
-            ]
-            
-            for strategy in click_strategies:
+            # Находим все строки таблицы
+            rows = []
+            for selector in self.selectors['table_rows']:
                 try:
-                    element = strategy()
-                    if element and element.is_displayed():
-                        return element
+                    found_rows = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                    if found_rows:
+                        rows.extend(found_rows)
+                        break
                 except:
                     continue
             
-            return None
+            if not rows:
+                print("⚠️ Строки таблицы не найдены")
+                return []
             
-        except Exception as e:
-            print(f"⚠️ Ошибка поиска кликабельного элемента: {e}")
-            return None
-    
-    def _smart_click(self, element, attempt: int = 0) -> bool:
-        """Умный клик с человекоподобным поведением"""
-        try:
-            # Добавляем случайную задержку перед кликом
-            delay_range = self.config.get_click_delay()
-            time.sleep(random.uniform(*delay_range))
+            print(f"📊 Найдено {len(rows)} строк в таблице")
             
-            # Стратегии клика в порядке предпочтения
-            click_methods = [
-                # Человекоподобный клик с движением мыши
-                lambda: self._human_like_click(element),
-                
-                # Стандартный Selenium клик
-                lambda: element.click(),
-                
-                # ActionChains клик
-                lambda: ActionChains(self.driver).move_to_element(element).click().perform(),
-                
-                # JavaScript клик
-                lambda: self.driver.execute_script("arguments[0].click();", element),
-                
-                # Клик с координатами
-                lambda: self._click_with_offset(element),
-                
-                # Клик через Enter
-                lambda: element.send_keys(Keys.ENTER),
-                
-                # Клик через Space
-                lambda: element.send_keys(Keys.SPACE)
-            ]
-            
-            # Пробуем разные методы клика
-            for i, click_method in enumerate(click_methods):
+            for i, row in enumerate(rows[:200]):  # Ограничиваем обработку
                 try:
-                    click_method()
-                    time.sleep(random.uniform(0.5, 1.5))
-                    return True
+                    if not row.is_displayed():
+                        continue
+                    
+                    server_data = self._extract_server_from_row(row, i)
+                    if server_data and server_data.get('name'):
+                        servers.append(server_data)
+                        
                 except Exception as e:
-                    if i == len(click_methods) - 1:
-                        self.extraction_stats['click_failures'] += 1
-                        print(f"⚠️ Все методы клика не сработали для элемента: {e}")
+                    print(f"⚠️ Ошибка обработки строки {i}: {e}")
                     continue
             
-            return False
+            return servers
             
         except Exception as e:
-            print(f"⚠️ Критическая ошибка при клике: {e}")
-            self.extraction_stats['click_failures'] += 1
-            return False
+            print(f"❌ Ошибка извлечения из таблицы: {e}")
+            return []
     
-    def _human_like_click(self, element):
-        """Человекоподобный клик с движением мыши"""
-        actions = ActionChains(self.driver)
-        
-        # Двигаемся к элементу с задержкой
-        actions.move_to_element(element)
-        time.sleep(random.uniform(0.1, 0.3))
-        
-        # Небольшое смещение для имитации человеческого поведения
-        offset_x = random.randint(-5, 5)
-        offset_y = random.randint(-3, 3)
-        actions.move_by_offset(offset_x, offset_y)
-        
-        time.sleep(random.uniform(0.1, 0.2))
-        actions.click()
-        actions.perform()
-    
-    def _click_with_offset(self, element):
-        """Клик с случайным смещением"""
-        actions = ActionChains(self.driver)
-        size = element.size
-        
-        # Рассчитываем случайные координаты внутри элемента
-        offset_x = random.randint(-size['width']//4, size['width']//4)
-        offset_y = random.randint(-size['height']//4, size['height']//4)
-        
-        actions.move_to_element_with_offset(element, offset_x, offset_y).click().perform()
-    
-    def _extract_dialog_content(self) -> Optional[str]:
-        """Извлечение содержимого диалога с множественными стратегиями"""
+    def _extract_server_from_row(self, row, row_index: int) -> dict:
+        """Извлечение данных сервера из строки таблицы"""
         try:
-            # Ждем появления диалога
-            dialog_selectors = [
-                ".v-dialog .v-card",
-                ".v-overlay__content",
-                ".modal-content",
-                ".dialog",
-                "[role='dialog']",
-                ".popup",
-                ".overlay-content"
-            ]
-            
-            dialog = None
-            for selector in dialog_selectors:
-                try:
-                    dialog = WebDriverWait(self.driver, self.config.DIALOG_TIMEOUT).until(
-                        EC.presence_of_element_located((By.CSS_SELECTOR, selector))
-                    )
-                    if dialog and dialog.is_displayed():
-                        break
-                except TimeoutException:
-                    continue
-            
-            if not dialog:
-                self.extraction_stats['dialog_failures'] += 1
-                print("⚠️ Диалог не найден")
+            row_text = row.text.strip()
+            if not row_text or 'loading' in row_text.lower():
                 return None
             
-            # Ждем загрузки содержимого
-            time.sleep(random.uniform(1, 2))
+            # Получаем все ячейки
+            cells = row.find_elements(By.TAG_NAME, "td")
+            if not cells:
+                return None
             
-            # Извлекаем текст
-            dialog_text = dialog.text
-            if not dialog_text or len(dialog_text.strip()) < 10:
-                # Пробуем извлечь через innerHTML
-                dialog_text = self.driver.execute_script("return arguments[0].innerHTML;", dialog)
+            server_data = {
+                'name': '',
+                'ip': '',
+                'protocol': 'DNSCrypt',
+                'row_index': row_index,
+                'extraction_method': 'table_direct'
+            }
             
-            return dialog_text
+            # Пытаемся извлечь данные из первой ячейки (обычно название)
+            if len(cells) > 0:
+                first_cell = cells[0]
+                cell_text = first_cell.text.strip()
+                
+                # Извлекаем имя сервера
+                name_match = None
+                for pattern in self.data_patterns['server_name']:
+                    match = re.search(pattern, cell_text)
+                    if match:
+                        name_match = match.group(1).strip()
+                        break
+                
+                if name_match:
+                    server_data['name'] = name_match
+                elif cell_text and len(cell_text) < 100:  # Простое имя
+                    server_data['name'] = cell_text
+            
+            # Ищем IP адрес во всех ячейках
+            for cell in cells:
+                cell_text = cell.text.strip()
+                for pattern in self.data_patterns['ip_address']:
+                    match = re.search(pattern, cell_text)
+                    if match:
+                        server_data['ip'] = match.group(1)
+                        break
+                if server_data['ip']:
+                    break
+            
+            # Определяем протокол
+            full_row_text = row_text.lower()
+            if 'doh' in full_row_text or 'dns-over-https' in full_row_text:
+                server_data['protocol'] = 'DoH'
+            elif 'dot' in full_row_text or 'dns-over-tls' in full_row_text:
+                server_data['protocol'] = 'DoT'
+            elif 'relay' in full_row_text:
+                server_data['protocol'] = 'DNSCrypt relay'
+            
+            # Если нет имени, используем любой доступный текст
+            if not server_data['name'] and row_text:
+                clean_text = row_text.split('\n')[0].strip()
+                if clean_text and len(clean_text) < 50:
+                    server_data['name'] = clean_text
+            
+            return server_data if server_data['name'] else None
             
         except Exception as e:
-            print(f"⚠️ Ошибка извлечения диалога: {e}")
-            self.extraction_stats['dialog_failures'] += 1
+            print(f"⚠️ Ошибка извлечения из строки {row_index}: {e}")
             return None
     
-    def _close_dialog(self):
-        """Закрытие диалога с множественными стратегиями"""
+    def _extract_via_dialogs(self, max_count: int = 100) -> list:
+        """Извлечение данных через открытие диалогов"""
+        servers = []
+        
         try:
-            # Стратегии закрытия диалога
-            close_strategies = [
-                # Кнопки закрытия
-                lambda: self.driver.find_element(By.CSS_SELECTOR, ".v-btn[aria-label*='close']").click(),
-                lambda: self.driver.find_element(By.CSS_SELECTOR, ".close").click(),
-                lambda: self.driver.find_element(By.CSS_SELECTOR, "[aria-label='Close']").click(),
-                lambda: self.driver.find_element(By.CSS_SELECTOR, ".modal-close").click(),
-                
-                # Клавиши
-                lambda: ActionChains(self.driver).send_keys(Keys.ESCAPE).perform(),
-                
-                # Клик по оверлею
-                lambda: self.driver.find_element(By.CSS_SELECTOR, ".v-overlay").click(),
-                lambda: self.driver.find_element(By.CSS_SELECTOR, ".modal-backdrop").click()
-            ]
+            print("🔍 Пробуем извлечение через диалоги...")
             
-            for strategy in close_strategies:
+            # Находим все возможные триггеры диалогов
+            triggers = []
+            for selector in self.selectors['dialog_triggers']:
                 try:
-                    strategy()
-                    time.sleep(random.uniform(0.5, 1))
-                    
-                    # Проверяем, закрылся ли диалог
-                    try:
-                        WebDriverWait(self.driver, 2).until_not(
-                            EC.presence_of_element_located((By.CSS_SELECTOR, ".v-dialog"))
-                        )
-                        return True
-                    except TimeoutException:
-                        continue
-                        
-                except Exception:
+                    found_triggers = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                    triggers.extend(found_triggers)
+                except:
                     continue
             
-            print("⚠️ Не удалось закрыть диалог")
-            return False
+            print(f"📊 Найдено {len(triggers)} потенциальных триггеров диалогов")
             
-        except Exception as e:
-            print(f"⚠️ Ошибка закрытия диалога: {e}")
-            return False
-    
-    def _parse_server_info(self, dialog_content: str, server_name: str) -> Optional[Dict[str, Any]]:
-        """Парсинг информации о сервере из содержимого диалога"""
-        try:
-            import re
-            
-            info = {
-                'name': server_name,
-                'ip': None,
-                'port': None,
-                'protocol': None,
-                'location': None,
-                'provider': None,
-                'dnssec': None,
-                'logs': None,
-                'filter': None
-            }
-            
-            # Регулярные выражения для поиска информации
-            patterns = {
-                'ip': [
-                    r'(?:IP|Address|Server)[\s:]*(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})',
-                    r'(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})',
-                    r'IP[\s\w]*?(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})'
-                ],
-                'port': [
-                    r'(?:Port|:)[\s]*(\d{2,5})',
-                    r':(\d{2,5})\b'
-                ],
-                'protocol': [
-                    r'(DNSCrypt(?:\s+relay)?)',
-                    r'(DoH|DoT|DNS-over-HTTPS|DNS-over-TLS)'
-                ],
-                'location': [
-                    r'(?:Location|Country|Region)[\s:]*([A-Za-z\s,]+)',
-                    r'Flag[\s]*([A-Za-z\s]+)'
-                ],
-                'provider': [
-                    r'(?:Provider|Organization)[\s:]*([^\n\r]+)',
-                    r'Provided by[\s:]*([^\n\r]+)'
-                ]
-            }
-            
-            # Очищаем содержимое от HTML тегов
-            clean_content = re.sub(r'<[^>]+>', ' ', dialog_content)
-            
-            # Извлекаем информацию по паттернам
-            for field, field_patterns in patterns.items():
-                for pattern in field_patterns:
-                    match = re.search(pattern, clean_content, re.IGNORECASE)
-                    if match:
-                        value = match.group(1).strip()
-                        if value and value not in ['N/A', 'Unknown', '-']:
-                            info[field] = value
-                            break
-            
-            # Дополнительные проверки и очистка
-            if info['ip']:
-                # Проверяем валидность IP
-                ip_parts = info['ip'].split('.')
-                if len(ip_parts) == 4 and all(0 <= int(part) <= 255 for part in ip_parts):
-                    # Определяем протокол по имени сервера, если не найден
-                    if not info['protocol']:
-                        if 'relay' in server_name.lower():
-                            info['protocol'] = 'DNSCrypt relay'
-                        else:
-                            info['protocol'] = 'DNSCrypt'
+            for i, trigger in enumerate(triggers[:max_count]):
+                try:
+                    if not trigger.is_displayed():
+                        continue
                     
-                    return info
+                    # Пробуем открыть диалог
+                    server_data = self._extract_from_trigger(trigger, i)
+                    if server_data:
+                        servers.append(server_data)
+                    
+                    # Ограничиваем время обработки
+                    if i > 0 and i % 20 == 0:
+                        time.sleep(1)
+                        
+                except Exception as e:
+                    print(f"⚠️ Ошибка с триггером {i}: {e}")
+                    continue
             
-            return None
+            return servers
             
         except Exception as e:
-            print(f"⚠️ Ошибка парсинга информации о сервере: {e}")
-            return None
+            print(f"❌ Ошибка извлечения через диалоги: {e}")
+            return []
     
-    def get_extraction_stats(self) -> Dict[str, Any]:
-        """Получение статистики извлечения"""
-        stats = self.extraction_stats.copy()
-        if stats['attempts'] > 0:
-            stats['success_rate'] = (stats['successes'] / stats['attempts']) * 100
-        else:
-            stats['success_rate'] = 0
-        return stats
-    
-    def reset_stats(self):
-        """Сброс статистики"""
-        self.extraction_stats = {
-            'attempts': 0,
-            'successes': 0,
-            'timeouts': 0,
-            'click_failures': 0,
-            'dialog_failures': 0
-        }
+    def _extract_from_trigger(self, trigger, index: int) -> dict:
+        """Извлечение данных из одного триггера диалога"""
+        try:
+            # Скроллим к элементу
+            self.driver.execute_script("arguments[0].scrollIntoView(true);", trigger)
+            time.sleep(0.5)
+            
+            # Пробуем кликнуть
+            actions = ActionChains(self.driver)
+            actions.move_to_element(trigger).click().perform()
+            time.sleep(1)
+            
