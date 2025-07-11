@@ -171,4 +171,236 @@ class AdvancedDialogExtractor:
                 # Клик через Enter
                 lambda: element.send_keys(Keys.ENTER),
                 
-               
+                # Клик через Space
+                lambda: element.send_keys(Keys.SPACE)
+            ]
+            
+            # Пробуем разные методы клика
+            for i, click_method in enumerate(click_methods):
+                try:
+                    click_method()
+                    time.sleep(random.uniform(0.5, 1.5))
+                    return True
+                except Exception as e:
+                    if i == len(click_methods) - 1:
+                        self.extraction_stats['click_failures'] += 1
+                        print(f"⚠️ Все методы клика не сработали для элемента: {e}")
+                    continue
+            
+            return False
+            
+        except Exception as e:
+            print(f"⚠️ Критическая ошибка при клике: {e}")
+            self.extraction_stats['click_failures'] += 1
+            return False
+    
+    def _human_like_click(self, element):
+        """Человекоподобный клик с движением мыши"""
+        actions = ActionChains(self.driver)
+        
+        # Двигаемся к элементу с задержкой
+        actions.move_to_element(element)
+        time.sleep(random.uniform(0.1, 0.3))
+        
+        # Небольшое смещение для имитации человеческого поведения
+        offset_x = random.randint(-5, 5)
+        offset_y = random.randint(-3, 3)
+        actions.move_by_offset(offset_x, offset_y)
+        
+        time.sleep(random.uniform(0.1, 0.2))
+        actions.click()
+        actions.perform()
+    
+    def _click_with_offset(self, element):
+        """Клик с случайным смещением"""
+        actions = ActionChains(self.driver)
+        size = element.size
+        
+        # Рассчитываем случайные координаты внутри элемента
+        offset_x = random.randint(-size['width']//4, size['width']//4)
+        offset_y = random.randint(-size['height']//4, size['height']//4)
+        
+        actions.move_to_element_with_offset(element, offset_x, offset_y).click().perform()
+    
+    def _extract_dialog_content(self) -> Optional[str]:
+        """Извлечение содержимого диалога с множественными стратегиями"""
+        try:
+            # Ждем появления диалога
+            dialog_selectors = [
+                ".v-dialog .v-card",
+                ".v-overlay__content",
+                ".modal-content",
+                ".dialog",
+                "[role='dialog']",
+                ".popup",
+                ".overlay-content"
+            ]
+            
+            dialog = None
+            for selector in dialog_selectors:
+                try:
+                    dialog = WebDriverWait(self.driver, self.config.DIALOG_TIMEOUT).until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, selector))
+                    )
+                    if dialog and dialog.is_displayed():
+                        break
+                except TimeoutException:
+                    continue
+            
+            if not dialog:
+                self.extraction_stats['dialog_failures'] += 1
+                print("⚠️ Диалог не найден")
+                return None
+            
+            # Ждем загрузки содержимого
+            time.sleep(random.uniform(1, 2))
+            
+            # Извлекаем текст
+            dialog_text = dialog.text
+            if not dialog_text or len(dialog_text.strip()) < 10:
+                # Пробуем извлечь через innerHTML
+                dialog_text = self.driver.execute_script("return arguments[0].innerHTML;", dialog)
+            
+            return dialog_text
+            
+        except Exception as e:
+            print(f"⚠️ Ошибка извлечения диалога: {e}")
+            self.extraction_stats['dialog_failures'] += 1
+            return None
+    
+    def _close_dialog(self):
+        """Закрытие диалога с множественными стратегиями"""
+        try:
+            # Стратегии закрытия диалога
+            close_strategies = [
+                # Кнопки закрытия
+                lambda: self.driver.find_element(By.CSS_SELECTOR, ".v-btn[aria-label*='close']").click(),
+                lambda: self.driver.find_element(By.CSS_SELECTOR, ".close").click(),
+                lambda: self.driver.find_element(By.CSS_SELECTOR, "[aria-label='Close']").click(),
+                lambda: self.driver.find_element(By.CSS_SELECTOR, ".modal-close").click(),
+                
+                # Клавиши
+                lambda: ActionChains(self.driver).send_keys(Keys.ESCAPE).perform(),
+                
+                # Клик по оверлею
+                lambda: self.driver.find_element(By.CSS_SELECTOR, ".v-overlay").click(),
+                lambda: self.driver.find_element(By.CSS_SELECTOR, ".modal-backdrop").click()
+            ]
+            
+            for strategy in close_strategies:
+                try:
+                    strategy()
+                    time.sleep(random.uniform(0.5, 1))
+                    
+                    # Проверяем, закрылся ли диалог
+                    try:
+                        WebDriverWait(self.driver, 2).until_not(
+                            EC.presence_of_element_located((By.CSS_SELECTOR, ".v-dialog"))
+                        )
+                        return True
+                    except TimeoutException:
+                        continue
+                        
+                except Exception:
+                    continue
+            
+            print("⚠️ Не удалось закрыть диалог")
+            return False
+            
+        except Exception as e:
+            print(f"⚠️ Ошибка закрытия диалога: {e}")
+            return False
+    
+    def _parse_server_info(self, dialog_content: str, server_name: str) -> Optional[Dict[str, Any]]:
+        """Парсинг информации о сервере из содержимого диалога"""
+        try:
+            import re
+            
+            info = {
+                'name': server_name,
+                'ip': None,
+                'port': None,
+                'protocol': None,
+                'location': None,
+                'provider': None,
+                'dnssec': None,
+                'logs': None,
+                'filter': None
+            }
+            
+            # Регулярные выражения для поиска информации
+            patterns = {
+                'ip': [
+                    r'(?:IP|Address|Server)[\s:]*(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})',
+                    r'(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})',
+                    r'IP[\s\w]*?(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})'
+                ],
+                'port': [
+                    r'(?:Port|:)[\s]*(\d{2,5})',
+                    r':(\d{2,5})\b'
+                ],
+                'protocol': [
+                    r'(DNSCrypt(?:\s+relay)?)',
+                    r'(DoH|DoT|DNS-over-HTTPS|DNS-over-TLS)'
+                ],
+                'location': [
+                    r'(?:Location|Country|Region)[\s:]*([A-Za-z\s,]+)',
+                    r'Flag[\s]*([A-Za-z\s]+)'
+                ],
+                'provider': [
+                    r'(?:Provider|Organization)[\s:]*([^\n\r]+)',
+                    r'Provided by[\s:]*([^\n\r]+)'
+                ]
+            }
+            
+            # Очищаем содержимое от HTML тегов
+            clean_content = re.sub(r'<[^>]+>', ' ', dialog_content)
+            
+            # Извлекаем информацию по паттернам
+            for field, field_patterns in patterns.items():
+                for pattern in field_patterns:
+                    match = re.search(pattern, clean_content, re.IGNORECASE)
+                    if match:
+                        value = match.group(1).strip()
+                        if value and value not in ['N/A', 'Unknown', '-']:
+                            info[field] = value
+                            break
+            
+            # Дополнительные проверки и очистка
+            if info['ip']:
+                # Проверяем валидность IP
+                ip_parts = info['ip'].split('.')
+                if len(ip_parts) == 4 and all(0 <= int(part) <= 255 for part in ip_parts):
+                    # Определяем протокол по имени сервера, если не найден
+                    if not info['protocol']:
+                        if 'relay' in server_name.lower():
+                            info['protocol'] = 'DNSCrypt relay'
+                        else:
+                            info['protocol'] = 'DNSCrypt'
+                    
+                    return info
+            
+            return None
+            
+        except Exception as e:
+            print(f"⚠️ Ошибка парсинга информации о сервере: {e}")
+            return None
+    
+    def get_extraction_stats(self) -> Dict[str, Any]:
+        """Получение статистики извлечения"""
+        stats = self.extraction_stats.copy()
+        if stats['attempts'] > 0:
+            stats['success_rate'] = (stats['successes'] / stats['attempts']) * 100
+        else:
+            stats['success_rate'] = 0
+        return stats
+    
+    def reset_stats(self):
+        """Сброс статистики"""
+        self.extraction_stats = {
+            'attempts': 0,
+            'successes': 0,
+            'timeouts': 0,
+            'click_failures': 0,
+            'dialog_failures': 0
+        }
