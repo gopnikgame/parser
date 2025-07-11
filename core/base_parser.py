@@ -24,38 +24,53 @@ class DNSCryptParser:
     
     def __init__(self):
         """Инициализация парсера с загрузкой конфигурации"""
-        self.config = ParserConfig.from_env()
-        self.driver_manager = SmartDriverManager(self.config)
-        self.driver = None
-        
-        # Основные модули
-        self.dialog_extractor = None
-        self.error_recovery = None
-        self.page_navigator = None
-        self.pagination_manager = None
-        self.server_processor = None
-        
-        # Файловые модули
-        self.config_parser = ConfigFileParser()
-        self.file_updater = FileUpdater()
-        self.github_manager = GitHubManager()
-        
-        # Метрики и кэширование
-        self.metrics = ParsingMetrics()
-        self.cache = ParsingCache()
-        
-        # Статистика сессии
-        self.session_stats = {
-            'total_processed': 0,
-            'successful': 0,
-            'failed': 0,
-            'cache_hits': 0,
-            'recovery_attempts': 0,
-            'start_time': None,
-            'end_time': None
-        }
-        
-        print("🚀 DNSCrypt Parser v2.0 инициализирован")
+        try:
+            self.config = ParserConfig.from_env()
+            self.driver_manager = SmartDriverManager(self.config)
+            self.driver = None
+            
+            # Основные модули
+            self.dialog_extractor = None
+            self.error_recovery = None
+            self.page_navigator = None
+            self.pagination_manager = None
+            self.server_processor = None
+            
+            # Файловые модули
+            self.config_parser = ConfigFileParser()
+            self.file_updater = FileUpdater()
+            self.github_manager = GitHubManager()
+            
+            # Метрики и кэширование с обработкой ошибок
+            print("📊 Инициализация системы метрик...")
+            self.metrics = ParsingMetrics()
+            
+            print("💾 Инициализация системы кэширования...")
+            self.cache = ParsingCache()
+            
+            if not self.cache.cache_enabled:
+                print("⚠️ Кэширование отключено, парсинг будет работать без кэша")
+            
+            # Статистика сессии
+            self.session_stats = {
+                'total_processed': 0,
+                'successful': 0,
+                'failed': 0,
+                'cache_hits': 0,
+                'recovery_attempts': 0,
+                'start_time': None,
+                'end_time': None
+            }
+            
+            print("🚀 DNSCrypt Parser v2.0 инициализирован")
+            
+        except Exception as e:
+            print(f"❌ Критическая ошибка инициализации DNSCryptParser: {e}")
+            # Создаем fallback объекты для продолжения работы
+            self.metrics = None
+            self.cache = None
+            print("⚠️ Парсер будет работать без метрик и кэширования")
+            raise
     
     def initialize(self) -> bool:
         """Полная инициализация всех компонентов парсера"""
@@ -75,8 +90,9 @@ class DNSCryptParser:
             self.pagination_manager = PaginationManager(self.driver, self.config)
             self.server_processor = ServerProcessor(self.driver, self.config, self.dialog_extractor)
             
-            # Очищаем устаревший кэш
-            self.cache.clear_expired_cache()
+            # Очищаем устаревший кэш (если доступен)
+            if self.cache and self.cache.cache_enabled:
+                self.cache.clear_expired_cache()
             
             print("✅ Все компоненты успешно инициализированы")
             return True
@@ -89,7 +105,11 @@ class DNSCryptParser:
         """Запуск полного цикла парсинга"""
         try:
             self.session_stats['start_time'] = time.time()
-            session_id = self.metrics.start_session()
+            
+            # Запускаем сессию метрик если доступна
+            session_id = None
+            if self.metrics:
+                session_id = self.metrics.start_session()
             
             print("🎯 Запуск полного цикла парсинга DNSCrypt серверов")
             print("=" * 70)
@@ -141,7 +161,11 @@ class DNSCryptParser:
             
             # Финализация сессии
             self.session_stats['end_time'] = time.time()
-            session = self.metrics.end_session()
+            
+            # Завершаем сессию метрик если доступна
+            session = None
+            if self.metrics:
+                session = self.metrics.end_session()
             
             # Подготовка итогового результата
             result = {
@@ -150,7 +174,7 @@ class DNSCryptParser:
                 'update_result': update_result,
                 'github_result': github_result,
                 'session_stats': self.session_stats,
-                'metrics': self.metrics.generate_detailed_report(),
+                'metrics': self.metrics.generate_detailed_report() if self.metrics else "Метрики недоступны",
                 'duration': self.session_stats['end_time'] - self.session_stats['start_time']
             }
             
@@ -303,7 +327,7 @@ class DNSCryptParser:
         
         # Выводим метрики
         metrics_report = result.get('metrics', '')
-        if metrics_report:
+        if metrics_report and metrics_report != "Метрики недоступны":
             print("\n📈 ДЕТАЛЬНЫЕ МЕТРИКИ:")
             print(metrics_report)
     
@@ -331,9 +355,12 @@ class DNSCryptParser:
             if self.driver_manager:
                 self.driver_manager.quit_driver()
             
-            # Сохраняем финальные метрики
+            # Сохраняем финальные метрики если доступны
             if self.metrics:
-                self.metrics.export_csv_report()
+                try:
+                    self.metrics.export_csv_report()
+                except Exception as e:
+                    print(f"⚠️ Не удалось экспортировать метрики: {e}")
             
             # Очистка временных файлов
             temp_files = ['temp_DNSCrypt_relay.txt', 'temp_DNSCrypt_servers.txt']

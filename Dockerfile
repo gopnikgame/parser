@@ -57,9 +57,13 @@ RUN CHROME_VERSION=$(google-chrome --version | awk '{print $3}' | cut -d. -f1-3)
 WORKDIR /app
 
 # Создаем пользователя parser
-RUN useradd -m -u 1000 parser && \
-    mkdir -p /app/output && \
+RUN useradd -m -u 1000 parser
+
+# ИСПРАВЛЕНИЕ ПРАВ ДОСТУПА: Создаем директории с правильными правами
+RUN mkdir -p /app/output && \
+    mkdir -p /app/output/cache && \
     mkdir -p /app/logs && \
+    chmod -R 755 /app && \
     chown -R parser:parser /app
 
 # Копируем зависимости и устанавливаем их
@@ -94,11 +98,24 @@ else\n\
 fi' > /app/auto_parser.sh && \
     chmod +x /app/auto_parser.sh
 
-# ИСПРАВЛЕНИЕ: Устанавливаем права как root, затем переключаемся на parser
+# ИСПРАВЛЕНИЕ: Устанавливаем окончательные права доступа
 RUN chown -R parser:parser /app && \
-    chmod -R 755 /app
+    chmod -R 755 /app && \
+    chmod -R 777 /app/output && \
+    chmod -R 777 /app/logs
 
+# Переключаемся на пользователя parser
 USER parser
+
+# Проверяем права доступа перед запуском
+RUN echo "🔍 Проверка прав доступа:" && \
+    ls -la /app/ && \
+    echo "📁 Проверка директории output:" && \
+    ls -la /app/output/ || echo "Директория output пуста" && \
+    echo "🛠️ Тестируем создание файла в output:" && \
+    touch /app/output/test_permissions.txt && \
+    rm /app/output/test_permissions.txt && \
+    echo "✅ Права доступа корректны!"
 
 # Используем scheduler с модульной системой
 CMD ["python", "scheduler.py"]
