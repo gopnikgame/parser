@@ -478,3 +478,110 @@ class AdvancedDialogExtractor:
         except Exception as e:
             print(f"⚠️ Ошибка при извлечении через JavaScript: {e}")
             return []
+
+    def extract_server_info_smart(self, row, server_name):
+        """
+        Умное извлечение информации о сервере из строки таблицы
+        Добавлено для обратной совместимости с legacy кодом
+        """
+        try:
+            print(f"🔍 Извлекаем информацию о сервере: {server_name}")
+            
+            # Пытаемся извлечь данные прямо из строки
+            server_data = self._extract_server_from_row(row, server_name)
+            
+            # Если данных мало, пытаемся открыть диалог для этой строки
+            if not server_data or not server_data.get('ip'):
+                print(f"   🔄 Пытаемся извлечь через диалог...")
+                dialog_data = self._try_extract_via_row_dialog(row, server_name)
+                if dialog_data:
+                    # Объединяем данные
+                    if server_data:
+                        server_data.update(dialog_data)
+                    else:
+                        server_data = dialog_data
+            
+            # Проверяем и нормализуем данные
+            if server_data:
+                server_data = self._normalize_server_data(server_data, server_name)
+                print(f"   ✅ Успешно извлечено: {server_data.get('name', 'N/A')} -> {server_data.get('ip', 'N/A')}")
+                return server_data
+            else:
+                print(f"   ❌ Не удалось извлечь данные для {server_name}")
+                return None
+                
+        except Exception as e:
+            print(f"   ❌ Ошибка извлечения данных для {server_name}: {e}")
+            return None
+    
+    def _try_extract_via_row_dialog(self, row, server_name):
+        """Попытка извлечь данные через диалог конкретной строки"""
+        try:
+            # Ищем кнопки или кликабельные элементы в строке
+            clickable_elements = []
+            
+            for selector in self.selectors['dialog_triggers']:
+                try:
+                    elements = row.find_elements(By.CSS_SELECTOR, selector)
+                    clickable_elements.extend(elements)
+                except Exception:
+                    continue
+            
+            # Если кнопок не найдено, попробуем кликнуть по самой строке
+            if not clickable_elements:
+                clickable_elements = [row]
+            
+            for element in clickable_elements[:2]:  # Максимум 2 попытки
+                try:
+                    # Скроллим к элементу
+                    self.driver.execute_script("arguments[0].scrollIntoView(true);", element)
+                    time.sleep(0.5)
+                    
+                    # Кликаем
+                    if element.is_displayed() and element.is_enabled():
+                        ActionChains(self.driver).move_to_element(element).click().perform()
+                        time.sleep(1)
+                        
+                        # Ждем диалог
+                        dialog_element = self._wait_for_dialog()
+                        if dialog_element:
+                            dialog_text = self._get_dialog_text(dialog_element)
+                            self._close_dialog_if_present()
+                            
+                            if dialog_text:
+                                return self._parse_dialog_text(dialog_text, server_name)
+                    
+                except Exception:
+                    continue
+            
+            return None
+            
+        except Exception as e:
+            print(f"      ⚠️ Ошибка при попытке открыть диалог: {e}")
+            return None
+    
+    def _normalize_server_data(self, server_data, original_name):
+        """Нормализация и проверка данных сервера"""
+        if not server_data:
+            return None
+        
+        # Если нет имени, используем оригинальное
+        if not server_data.get('name') and original_name:
+            server_data['name'] = original_name
+        
+        # Проверяем валидность IP
+        ip = server_data.get('ip', '')
+        if ip:
+            # Простая валидация IP
+            ip_parts = ip.split('.')
+            if len(ip_parts) == 4 and all(part.isdigit() and 0 <= int(part) <= 255 for part in ip_parts):
+                server_data['ip'] = ip
+            else:
+                # Если IP невалидный, убираем его
+                server_data['ip'] = ''
+        
+        # Устанавливаем протокол по умолчанию
+        if not server_data.get('protocol'):
+            server_data['protocol'] = 'DNSCrypt'
+        
+        return server_data

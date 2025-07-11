@@ -292,14 +292,16 @@ def enhanced_get_all_server_rows(driver):
     if MODULAR_AVAILABLE:
         from data_handlers.server_processor import ServerProcessor
         from core.config import ParserConfig
+        from extractors.dialog_extractor import AdvancedDialogExtractor
         
         config = ParserConfig.from_env()
-        processor = ServerProcessor(driver, config, None)
+        dialog_extractor = AdvancedDialogExtractor(driver, config)
+        processor = ServerProcessor(driver, config, dialog_extractor)
         return processor._get_server_rows_enhanced()
     elif LEGACY_AVAILABLE:
         return legacy_parser.enhanced_get_all_server_rows(driver)
     else:
-        raise RuntimeError("Ни модульная, ни legacy версия недоступны")
+        raise RuntimeError("Ни модульная, ни legacy версия недоступна")
 
 def extract_server_info_from_row_enhanced(driver, row, server_name):
     """Улучшенная обертка для извлечения информации"""
@@ -340,9 +342,3 @@ if __name__ == "__main__":
         except:
             pass
         
-        sys.exit(0)
-    except Exception as e:
-        print(f"\n❌ Непредвиденная ошибка: {e}")
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
