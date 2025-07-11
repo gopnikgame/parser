@@ -6,17 +6,18 @@ import os
 import sys
 from typing import Dict, List, Optional, Any
 
-from .config import ParserConfig
-from .driver_manager import SmartDriverManager
-from ..extractors.dialog_extractor import AdvancedDialogExtractor
-from ..strategies.error_recovery import SmartErrorRecovery
-from ..utils.metrics import ParsingMetrics, ParsingCache
-from ..file_handlers.config_parser import ConfigFileParser
-from ..file_handlers.file_updater import FileUpdater
-from ..github.github_manager import GitHubManager
-from ..page_handlers.page_navigator import PageNavigator
-from ..page_handlers.pagination_manager import PaginationManager
-from ..data_handlers.server_processor import ServerProcessor
+# Исправляем импорты на абсолютные для работы в Docker
+from core.config import ParserConfig
+from core.driver_manager import SmartDriverManager
+from extractors.dialog_extractor import AdvancedDialogExtractor
+from strategies.error_recovery import SmartErrorRecovery
+from utils.metrics import ParsingMetrics, ParsingCache
+from file_handlers.config_parser import ConfigFileParser
+from file_handlers.file_updater import FileUpdater
+from github.github_manager import GitHubManager
+from page_handlers.page_navigator import PageNavigator
+from page_handlers.pagination_manager import PaginationManager
+from data_handlers.server_processor import ServerProcessor
 
 class DNSCryptParser:
     """Главный класс парсера DNSCrypt с полной модульной архитектурой"""

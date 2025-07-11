@@ -6,8 +6,10 @@ import random
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from typing import Dict, List, Any
-from ..core.config import ParserConfig
-from ..extractors.dialog_extractor import AdvancedDialogExtractor
+
+# Исправляем импорты на абсолютные
+from core.config import ParserConfig
+from extractors.dialog_extractor import AdvancedDialogExtractor
 
 class ServerProcessor:
     """Процессор для обработки серверов с сайта"""
