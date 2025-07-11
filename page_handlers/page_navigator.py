@@ -8,7 +8,16 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException
-from ..core.config import ParserConfig
+
+# Используем относительный импорт для лучшей совместимости
+try:
+    from ..core.config import ParserConfig
+except ImportError:
+    # Fallback для случаев когда относительный импорт не работает
+    import sys
+    from pathlib import Path
+    sys.path.append(str(Path(__file__).parent.parent))
+    from core.config import ParserConfig
 
 class PageNavigator:
     """Навигатор для работы со страницами"""

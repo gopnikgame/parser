@@ -7,9 +7,17 @@ from selenium import webdriver
 from selenium.webdriver.common.by import By
 from typing import Dict, List, Any
 
-# Исправляем импорты на абсолютные
-from core.config import ParserConfig
-from extractors.dialog_extractor import AdvancedDialogExtractor
+# Используем относительные импорты для лучшей совместимости
+try:
+    from ..core.config import ParserConfig
+    from ..extractors.dialog_extractor import AdvancedDialogExtractor
+except ImportError:
+    # Fallback для случаев когда относительный импорт не работает
+    import sys
+    from pathlib import Path
+    sys.path.append(str(Path(__file__).parent.parent))
+    from core.config import ParserConfig
+    from extractors.dialog_extractor import AdvancedDialogExtractor
 
 class ServerProcessor:
     """Процессор для обработки серверов с сайта"""

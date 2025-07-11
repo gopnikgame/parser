@@ -10,7 +10,16 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.keys import Keys
 from selenium.common.exceptions import TimeoutException
-from ..core.config import ParserConfig
+
+# Используем относительный импорт для лучшей совместимости
+try:
+    from ..core.config import ParserConfig
+except ImportError:
+    # Fallback для случаев когда относительный импорт не работает
+    import sys
+    from pathlib import Path
+    sys.path.append(str(Path(__file__).parent.parent))
+    from core.config import ParserConfig
 
 class PaginationManager:
     """Менеджер пагинации для настройки отображения всех элементов"""
@@ -240,18 +249,4 @@ class PaginationManager:
             
             # Стратегия 3: JavaScript принудительная загрузка всех данных
             try:
-                print("🔧 Попытка JavaScript принудительной загрузки...")
-                result = self._try_javascript_pagination()
-                if result:
-                    time.sleep(10)
-                    print("✅ JavaScript принудительная настройка выполнена")
-                    return True
-            except Exception as e:
-                print(f"⚠️ JavaScript настройка не удалась: {e}")
-            
-            print("⚠️ Все стратегии пагинации не сработали")
-            return False
-            
-        except Exception as e:
-            print(f"❌ Ошибка стратегий пагинации: {e}")
-            return False
+                print("🔧 Попытка JavaScript принудительной

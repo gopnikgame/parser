@@ -10,8 +10,15 @@ from selenium.webdriver.common.keys import Keys
 from selenium.common.exceptions import TimeoutException, WebDriverException
 from typing import Optional, Dict, Any, List
 
-# Исправляем импорт на абсолютный
-from core.config import ParserConfig
+# Используем относительный импорт для лучшей совместимости
+try:
+    from ..core.config import ParserConfig
+except ImportError:
+    # Fallback для случаев когда относительный импорт не работает
+    import sys
+    from pathlib import Path
+    sys.path.append(str(Path(__file__).parent.parent))
+    from core.config import ParserConfig
 
 class AdvancedDialogExtractor:
     """Продвинутый экстрактор диалогов с множественными стратегиями"""
@@ -351,7 +358,7 @@ class AdvancedDialogExtractor:
                     r'(?:Provider|Organization)[\s:]*([^\n\r]+)',
                     r'Provided by[\s:]*([^\n\r]+)'
                 ]
-            }
+            ]
             
             # Очищаем содержимое от HTML тегов
             clean_content = re.sub(r'<[^>]+>', ' ', dialog_content)
