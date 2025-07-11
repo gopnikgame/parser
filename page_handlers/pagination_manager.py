@@ -66,7 +66,7 @@ class PaginationManager:
                 dropdown = self.driver.find_element(By.CSS_SELECTOR, selector)
                 if dropdown.is_displayed():
                     return self._click_pagination_dropdown(dropdown)
-            except:
+            except Exception:
                 continue
         
         return False
@@ -83,7 +83,7 @@ class PaginationManager:
                 dropdown = self.driver.find_element(By.CSS_SELECTOR, selector)
                 if dropdown.is_displayed():
                     return self._click_pagination_dropdown(dropdown)
-            except:
+            except Exception:
                 continue
         
         return False
@@ -102,7 +102,7 @@ class PaginationManager:
                 dropdown = self.driver.find_element(By.CSS_SELECTOR, selector)
                 if dropdown.is_displayed():
                     return self._click_pagination_dropdown(dropdown)
-            except:
+            except Exception:
                 continue
         
         return False
@@ -137,7 +137,7 @@ class PaginationManager:
                 });
             """)
             return True
-        except:
+        except Exception:
             return False
     
     def _click_pagination_dropdown(self, dropdown) -> bool:
@@ -162,12 +162,12 @@ class PaginationManager:
                     )
                     option.click()
                     return True
-                except:
+                except Exception:
                     continue
             
             return False
             
-        except:
+        except Exception:
             return False
     
     def try_multiple_pagination_strategies(self) -> bool:
@@ -200,10 +200,10 @@ class PaginationManager:
                                     EC.element_to_be_clickable((By.XPATH, option_xpath))
                                 )
                                 option.click()
-                                print(f"✅ Выбрана опция 'All'")
+                                print("✅ Выбрана опция 'All'")
                                 time.sleep(5)
                                 return True
-                            except:
+                            except Exception:
                                 continue
                         
                         # Если "All" не найдено, ищем максимальное число
@@ -215,14 +215,14 @@ class PaginationManager:
                                 print(f"✅ Выбрана максимальная опция: {max_option.text}")
                                 time.sleep(5)
                                 return True
-                        except:
+                        except Exception:
                             pass
                         
                         # Закрываем dropdown
                         self.driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
                         time.sleep(1)
                         
-                except Exception as e:
+                except Exception:
                     continue
             
             # Стратегия 2: Проверяем наличие кнопок пагинации и кликаем "последняя страница"
@@ -239,14 +239,71 @@ class PaginationManager:
                         last_button = self.driver.find_element(By.CSS_SELECTOR, selector)
                         if last_button.is_displayed() and last_button.is_enabled():
                             last_button.click()
-                            print(f"✅ Переход на последнюю страницу")
+                            print("✅ Переход на последнюю страницу")
                             time.sleep(5)
                             return True
-                    except:
+                    except Exception:
                         continue
-            except:
+            except Exception:
                 pass
             
             # Стратегия 3: JavaScript принудительная загрузка всех данных
             try:
-                print("🔧 Попытка JavaScript принудительной
+                print("🔧 Попытка JavaScript принудительной загрузки...")
+                self.driver.execute_script("""
+                    // Пытаемся найти и изменить Vue.js данные
+                    if (window.Vue && window.Vue.config) {
+                        window.Vue.config.devtools = true;
+                    }
+                    
+                    // Поиск Vue компонентов в DOM
+                    var vueElements = document.querySelectorAll('[data-v-]');
+                    vueElements.forEach(function(el) {
+                        if (el.__vue__ && el.__vue__.$data) {
+                            var data = el.__vue__.$data;
+                            if (data.itemsPerPage) data.itemsPerPage = -1;
+                            if (data.pagination && data.pagination.itemsPerPage) {
+                                data.pagination.itemsPerPage = -1;
+                            }
+                        }
+                    });
+                    
+                    // Принудительная загрузка данных через API если возможно
+                    if (window.axios) {
+                        console.log('Axios доступен, пытаемся загрузить все данные');
+                    }
+                """)
+                time.sleep(3)
+                return True
+            except Exception as e:
+                print(f"⚠️ JavaScript стратегия не сработала: {e}")
+                pass
+            
+            return False
+            
+        except Exception as e:
+            print(f"⚠️ Ошибка в стратегиях пагинации: {e}")
+            return False
+    
+    def wait_for_pagination_load(self, timeout: int = 30) -> bool:
+        """Ожидание загрузки данных после изменения пагинации"""
+        try:
+            # Ждем исчезновения лоадера
+            WebDriverWait(self.driver, timeout).until_not(
+                EC.presence_of_element_located((By.CSS_SELECTOR, ".v-progress-linear, .loading, .spinner"))
+            )
+            
+            # Ждем появления данных в таблице
+            WebDriverWait(self.driver, timeout).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "tbody tr, .v-data-table-rows tr"))
+            )
+            
+            time.sleep(2)  # Дополнительная пауза для стабилизации
+            return True
+            
+        except TimeoutException:
+            print("⚠️ Таймаут ожидания загрузки данных пагинации")
+            return False
+        except Exception as e:
+            print(f"⚠️ Ошибка ожидания загрузки пагинации: {e}")
+            return False

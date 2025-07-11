@@ -25,26 +25,11 @@ class SmartErrorRecovery:
         self.driver = driver
         self.config = config
         self.error_patterns = {
-            'cloudflare_protection': [
-                'cloudflare', 'checking your browser', 'security check',
-                'ddos protection', 'bot protection'
-            ],
-            'rate_limiting': [
-                'too many requests', 'rate limit', 'slow down',
-                'temporarily blocked', 'throttled'
-            ],
-            'page_not_loaded': [
-                'no data available', 'loading', 'please wait',
-                'still loading', 'fetching data'
-            ],
-            'network_error': [
-                'network error', 'connection timeout', 'failed to load',
-                'dns error', 'connection refused'
-            ],
-            'javascript_error': [
-                'script error', 'uncaught', 'undefined is not a function',
-                'cannot read property', 'vue is not defined'
-            ]
+            'cloudflare_protection': ['cloudflare', 'checking your browser', 'security check'],
+            'rate_limiting': ['too many requests', 'rate limit', 'slow down'],
+            'page_not_loaded': ['no data available', 'loading', 'please wait'],
+            'network_error': ['network error', 'connection timeout', 'failed to load'],
+            'javascript_error': ['script error', 'uncaught', 'undefined is not a function']
         }
         
         self.recovery_stats = {
@@ -104,17 +89,14 @@ class SmartErrorRecovery:
         print("🛡️ Обнаружена Cloudflare защита...")
         
         try:
-            # Ждем прохождения проверки
             wait_time = random.uniform(15, 30)
             print(f"⏳ Ожидание {wait_time:.1f}с для прохождения проверки...")
             time.sleep(wait_time)
             
-            # Проверяем, прошла ли проверка
             if self._check_page_accessibility():
                 print("✅ Cloudflare проверка пройдена")
                 return True
             
-            # Если не прошла - пробуем обновить страницу
             print("🔄 Обновление страницы...")
             self.driver.refresh()
             time.sleep(random.uniform(10, 20))
@@ -130,12 +112,10 @@ class SmartErrorRecovery:
         print("⏳ Обнаружено ограничение скорости...")
         
         try:
-            # Экспоненциальная задержка
             wait_time = random.uniform(30, 90)
             print(f"⏳ Пауза {wait_time:.1f}с для снятия ограничений...")
             time.sleep(wait_time)
             
-            # Проверяем доступность
             return self._check_page_accessibility()
             
         except Exception as e:
@@ -146,47 +126,22 @@ class SmartErrorRecovery:
         """Обработка проблем загрузки страницы"""
         print("🔄 Перезагрузка страницы...")
         
-        reload_strategies = [
-            self._soft_reload,
-            self._hard_reload, 
-            self._navigate_fresh,
-            self._clear_cache_reload
-        ]
-        
-        for strategy in reload_strategies:
-            try:
-                print(f"🔄 Применяем стратегию: {strategy.__name__}")
-                
-                if strategy():
-                    # Ждем загрузки и проверяем готовность
-                    if self._wait_for_page_ready():
-                        return True
-                        
-            except Exception as e:
-                print(f"⚠️ Стратегия {strategy.__name__} не сработала: {e}")
-                continue
-        
-        return False
+        try:
+            self.driver.refresh()
+            time.sleep(random.uniform(5, 10))
+            return self._wait_for_page_ready()
+        except Exception as e:
+            print(f"❌ Ошибка перезагрузки: {e}")
+            return False
     
     def _handle_network_error(self, context: str, error_text: str) -> bool:
         """Обработка сетевых ошибок"""
         print("🌐 Обработка сетевой ошибки...")
         
         try:
-            # Проверяем соединение
-            if not self._check_internet_connection():
-                print("❌ Нет интернет соединения")
-                return False
-            
-            # Пробуем переподключиться
             current_url = self.driver.current_url
-            
-            # Пауза перед повторным подключением
             time.sleep(random.uniform(10, 20))
-            
-            # Переход на страницу заново
             self.driver.get(current_url)
-            
             return self._wait_for_page_ready()
             
         except Exception as e:
@@ -198,12 +153,76 @@ class SmartErrorRecovery:
         print("🔧 Обработка JavaScript ошибки...")
         
         try:
-            # Очищаем console errors
-            try:
-                self.driver.get_log('browser')
-            except:
-                pass
-            
-            # Перезагружаем страницу для сброса состояния JS
             self.driver.refresh()
+            time.sleep(random.uniform(5, 10))
+            return self._wait_for_page_ready()
             
+        except Exception as e:
+            print(f"❌ Ошибка обработки JavaScript ошибки: {e}")
+            return False
+    
+    def _handle_generic_error(self, context: str, error_text: str) -> bool:
+        """Обработка общих ошибок"""
+        print("🔧 Обработка общей ошибки...")
+        
+        try:
+            time.sleep(random.uniform(5, 15))
+            self.driver.refresh()
+            return self._wait_for_page_ready()
+            
+        except Exception as e:
+            print(f"❌ Ошибка обработки общей ошибки: {e}")
+            return False
+    
+    def _check_page_accessibility(self) -> bool:
+        """Проверка доступности страницы"""
+        try:
+            WebDriverWait(self.driver, 10).until(
+                lambda driver: driver.execute_script("return document.readyState") == "complete"
+            )
+            
+            page_text = self.driver.page_source.lower()
+            blocking_patterns = ['cloudflare', 'checking your browser', 'security check']
+            
+            return not any(pattern in page_text for pattern in blocking_patterns)
+            
+        except Exception:
+            return False
+    
+    def _wait_for_page_ready(self) -> bool:
+        """Ожидание готовности страницы"""
+        try:
+            WebDriverWait(self.driver, self.config.PAGE_TIMEOUT).until(
+                lambda driver: driver.execute_script("return document.readyState") == "complete"
+            )
+            
+            time.sleep(random.uniform(2, 5))
+            
+            try:
+                WebDriverWait(self.driver, 10).until(
+                    EC.presence_of_element_located((By.TAG_NAME, "body"))
+                )
+                return True
+            except TimeoutException:
+                return False
+                
+        except Exception:
+            return False
+    
+    def get_recovery_stats(self) -> Dict[str, any]:
+        """Получение статистики восстановления"""
+        stats = self.recovery_stats.copy()
+        if stats['total_errors'] > 0:
+            stats['success_rate'] = (stats['successful_recoveries'] / stats['total_errors']) * 100
+        else:
+            stats['success_rate'] = 0
+        return stats
+    
+    def reset_stats(self):
+        """Сброс статистики восстановления"""
+        self.recovery_stats = {
+            'total_errors': 0,
+            'successful_recoveries': 0,
+            'failed_recoveries': 0,
+            'recovery_methods_used': {}
+        }
