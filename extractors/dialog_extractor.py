@@ -10,11 +10,12 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, NoSuchElementException, WebDriverException
 from selenium.webdriver.common.action_chains import ActionChains
 
-class DialogExtractor:
+class AdvancedDialogExtractor:
     """Извлечение данных из диалогов - ОБНОВЛЕННАЯ ВЕРСИЯ v2.1 для Vue.js"""
     
-    def __init__(self, driver: webdriver.Chrome):
+    def __init__(self, driver: webdriver.Chrome, config=None):
         self.driver = driver
+        self.config = config
         
         # Обновленные селекторы для Vue.js/Vuetify приложения
         self.selectors = {
@@ -172,7 +173,7 @@ class DialogExtractor:
                     if found_rows:
                         rows.extend(found_rows)
                         break
-                except:
+                except Exception:
                     continue
             
             if not rows:
@@ -283,7 +284,7 @@ class DialogExtractor:
                 try:
                     found_triggers = self.driver.find_elements(By.CSS_SELECTOR, selector)
                     triggers.extend(found_triggers)
-                except:
+                except Exception:
                     continue
             
             print(f"📊 Найдено {len(triggers)} потенциальных триггеров диалогов")
@@ -323,4 +324,157 @@ class DialogExtractor:
             actions = ActionChains(self.driver)
             actions.move_to_element(trigger).click().perform()
             time.sleep(1)
+
+            # Ждем появления диалога
+            dialog_element = self._wait_for_dialog()
+            if not dialog_element:
+                self._close_dialog_if_present()
+                return None
+
+            # Извлекаем текст
+            dialog_text = self._get_dialog_text(dialog_element)
+            if not dialog_text:
+                self._close_dialog_if_present()
+                return None
+
+            # Парсим данные
+            server_data = self._parse_dialog_text(dialog_text, index)
+
+            # Закрываем диалог
+            self._close_dialog_if_present()
+
+            return server_data
+
+        except (NoSuchElementException, TimeoutException, WebDriverException) as e:
+            print(f"⚠️ Ошибка при обработке триггера {index}: {e}")
+            self._close_dialog_if_present()
+            return None
+        except Exception as e:
+            print(f"❌ Непредвиденная ошибка с триггером {index}: {e}")
+            self._close_dialog_if_present()
+            return None
+
+    def _wait_for_dialog(self):
+        """Ожидание появления диалогового окна"""
+        for selector in self.selectors['dialogs']:
+            try:
+                return WebDriverWait(self.driver, 5).until(
+                    EC.visibility_of_element_located((By.CSS_SELECTOR, selector))
+                )
+            except TimeoutException:
+                continue
+        return None
+
+    def _get_dialog_text(self, dialog_element) -> str:
+        """Извлечение текста из диалогового окна"""
+        for selector in self.selectors['dialog_content']:
+            try:
+                content_element = dialog_element.find_element(By.CSS_SELECTOR, selector)
+                text = content_element.text.strip()
+                if text:
+                    return text
+            except NoSuchElementException:
+                continue
+        return dialog_element.text.strip()
+
+    def _parse_dialog_text(self, text: str, index: int) -> dict:
+        """Парсинг текста диалога для извлечения данных сервера"""
+        server_data = {
+            'name': '',
+            'ip': '',
+            'protocol': 'DNSCrypt',
+            'row_index': index,
+            'extraction_method': 'dialog'
+        }
+
+        # Извлекаем имя сервера
+        for pattern in self.data_patterns['server_name']:
+            match = re.search(pattern, text)
+            if match:
+                server_data['name'] = match.group(1).strip()
+                break
+
+        # Извлекаем IP
+        for pattern in self.data_patterns['ip_address']:
+            match = re.search(pattern, text)
+            if match:
+                server_data['ip'] = match.group(1).strip()
+                break
+
+        # Определяем протокол
+        text_lower = text.lower()
+        if 'doh' in text_lower or 'dns-over-https' in text_lower:
+            server_data['protocol'] = 'DoH'
+        elif 'dot' in text_lower or 'dns-over-tls' in text_lower:
+            server_data['protocol'] = 'DoT'
+        elif 'relay' in text_lower:
+            server_data['protocol'] = 'DNSCrypt relay'
+
+        return server_data if server_data['name'] else None
+
+    def _close_dialog_if_present(self):
+        """Закрытие диалогового окна, если оно присутствует"""
+        for selector in self.selectors['dialog_close']:
+            try:
+                close_button = self.driver.find_element(By.CSS_SELECTOR, selector)
+                if close_button.is_displayed():
+                    actions = ActionChains(self.driver)
+                    actions.move_to_element(close_button).click().perform()
+                    time.sleep(0.5)
+                    return
+            except (NoSuchElementException, WebDriverException):
+                continue
+        # Fallback: click outside if no close button found
+        try:
+            actions = ActionChains(self.driver)
+            actions.move_by_offset(10, 10).click().perform()
+            time.sleep(0.5)
+        except Exception:
+            pass
+
+    def _extract_via_javascript(self) -> list:
+        """Извлечение данных из Vue.js компонента через JavaScript"""
+        print("🔍 Пробуем извлечение через JavaScript...")
+        servers = []
+        try:
+            # Этот скрипт предполагает, что данные хранятся в свойстве `items` или `servers`
+            # корневого Vue-компонента. Его нужно адаптировать под конкретную структуру.
+            script = """
+            const app = document.querySelector('#app') || document.body;
+            if (app && app.__vue__) {
+                const vueInstance = app.__vue__;
+                // Ищем данные в разных местах
+                const dataSources = [
+                    vueInstance.servers,
+                    vueInstance.items,
+                    vueInstance.$data.servers,
+                    vueInstance.$data.items,
+                    vueInstance.$children[0].servers,
+                    vueInstance.$children[0].items
+                ];
+                for (const source of dataSources) {
+                    if (source && Array.isArray(source) && source.length > 0) {
+                        return source;
+                    }
+                }
+            }
+            return [];
+            """
+            raw_servers = self.driver.execute_script(script)
             
+            for i, item in enumerate(raw_servers):
+                if isinstance(item, dict):
+                    server_data = {
+                        'name': item.get('name', item.get('server', '')),
+                        'ip': item.get('ip', item.get('address', '')),
+                        'protocol': item.get('protocol', 'DNSCrypt'),
+                        'row_index': i,
+                        'extraction_method': 'javascript'
+                    }
+                    if server_data['name']:
+                        servers.append(server_data)
+
+            return servers
+        except Exception as e:
+            print(f"⚠️ Ошибка при извлечении через JavaScript: {e}")
+            return []
