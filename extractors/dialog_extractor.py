@@ -98,18 +98,17 @@ class AdvancedDialogExtractor:
                 r'Server:\s*([^\n\r]+)',
                 r'Name:\s*([^\n\r]+)',
                 r'Hostname:\s*([^\n\r]+)',
-                r'^([a-zA-Z0-9\-_.]+)(?:\s|$)',
-                r'([a-zA-Z0-9\-_.]+\.(?:com|org|net|info|io|me|co))',
+                r'sdns:\/\/([^\n\r"\'<]+)',  # More specific to avoid grabbing unrelated text
             ],
             'ip_address': [
-                r'IP:\s*([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})',
                 r'Address:\s*([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})',
-                r'([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})',
+                r'IP:\s*([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})',
+                r'\b([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})\b',  # Added word boundary
             ],
             'protocol': [
-                r'Protocol:\s*(DNSCrypt|DoH|DoT)',
-                r'Type:\s*(DNSCrypt|DoH|DoT)',
-                r'(DNSCrypt|DNS-over-HTTPS|DNS-over-TLS)',
+                r'Protocol:\s*(DNSCrypt|DoH|DoT|DNSCrypt relay)',
+                r'Type:\s*(DNSCrypt|DoH|DoT|DNSCrypt relay)',
+                r'(DNSCrypt relay|DNSCrypt|DNS-over-HTTPS|DNS-over-TLS)',
             ]
         }
     
@@ -245,8 +244,12 @@ class AdvancedDialogExtractor:
                 for pattern in self.data_patterns['ip_address']:
                     match = re.search(pattern, cell_text)
                     if match:
-                        server_data['ip'] = match.group(1)
-                        break
+                        ip = match.group(1).strip()
+                        # Простая валидация IP
+                        ip_parts = ip.split('.')
+                        if len(ip_parts) == 4 and all(part.isdigit() and 0 <= int(part) <= 255 for part in ip_parts):
+                            server_data['ip'] = ip
+                            break
                 if server_data['ip']:
                     break
             
@@ -334,8 +337,11 @@ class AdvancedDialogExtractor:
             # Извлекаем текст
             dialog_text = self._get_dialog_text(dialog_element)
             if not dialog_text:
+                print(f"   ⚠️ Пустой диалог для триггера {index}")
                 self._close_dialog_if_present()
                 return None
+            
+            print(f"   📄 Диалог получен, {len(dialog_text)} символов.")
 
             # Парсим данные
             server_data = self._parse_dialog_text(dialog_text, index)
@@ -366,16 +372,27 @@ class AdvancedDialogExtractor:
         return None
 
     def _get_dialog_text(self, dialog_element) -> str:
-        """Извлечение текста из диалогового окна"""
-        for selector in self.selectors['dialog_content']:
-            try:
-                content_element = dialog_element.find_element(By.CSS_SELECTOR, selector)
-                text = content_element.text.strip()
-                if text:
-                    return text
-            except NoSuchElementException:
-                continue
-        return dialog_element.text.strip()
+        """Извлечение текста из диалогового окна с несколькими стратегиями."""
+        text = ""
+        try:
+            # Strategy 1: Standard .text attribute
+            text = dialog_element.text.strip()
+            if text:
+                return text
+
+            # Strategy 2: textContent via JavaScript
+            text = self.driver.execute_script("return arguments[0].textContent;", dialog_element).strip()
+            if text:
+                return text
+
+            # Strategy 3: innerHTML via JavaScript (less clean, but sometimes necessary)
+            text = self.driver.execute_script("return arguments[0].innerHTML;", dialog_element).strip()
+            if text:
+                return text
+        except Exception as e:
+            print(f"      ⚠️ Ошибка при извлечении текста диалога: {e}")
+        
+        return text
 
     def _parse_dialog_text(self, text: str, index: int) -> dict:
         """Парсинг текста диалога для извлечения данных сервера"""
@@ -389,7 +406,7 @@ class AdvancedDialogExtractor:
 
         # Извлекаем имя сервера
         for pattern in self.data_patterns['server_name']:
-            match = re.search(pattern, text)
+            match = re.search(pattern, text, re.IGNORECASE)
             if match:
                 server_data['name'] = match.group(1).strip()
                 break
@@ -398,8 +415,12 @@ class AdvancedDialogExtractor:
         for pattern in self.data_patterns['ip_address']:
             match = re.search(pattern, text)
             if match:
-                server_data['ip'] = match.group(1).strip()
-                break
+                ip = match.group(1).strip()
+                # Простая валидация IP
+                ip_parts = ip.split('.')
+                if len(ip_parts) == 4 and all(part.isdigit() and 0 <= int(part) <= 255 for part in ip_parts):
+                    server_data['ip'] = ip
+                    break
 
         # Определяем протокол
         text_lower = text.lower()
@@ -504,7 +525,10 @@ class AdvancedDialogExtractor:
             # Проверяем и нормализуем данные
             if server_data:
                 server_data = self._normalize_server_data(server_data, server_name)
-                print(f"   ✅ Успешно извлечено: {server_data.get('name', 'N/A')} -> {server_data.get('ip', 'N/A')}")
+                if server_data.get('ip'):
+                    print(f"   ✅ Успешно извлечено: {server_data.get('name', 'N/A')} -> {server_data.get('ip', 'N/A')}")
+                else:
+                    print(f"   ⚠️  Извлечено имя, но не IP: {server_data.get('name', 'N/A')}")
                 return server_data
             else:
                 print(f"   ❌ Не удалось извлечь данные для {server_name}")
@@ -549,9 +573,13 @@ class AdvancedDialogExtractor:
                             self._close_dialog_if_present()
                             
                             if dialog_text:
+                                print(f"      📄 Диалог для '{server_name}' получен, {len(dialog_text)} символов.")
                                 return self._parse_dialog_text(dialog_text, server_name)
+                            else:
+                                print(f"      ⚠️ Пустой диалог для '{server_name}'.")
                     
-                except Exception:
+                except Exception as e:
+                    print(f"      ⚠️ Ошибка клика/обработки диалога: {e}")
                     continue
             
             return None
