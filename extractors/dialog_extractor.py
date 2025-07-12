@@ -362,14 +362,13 @@ class AdvancedDialogExtractor:
 
     def _wait_for_dialog(self):
         """Ожидание появления диалогового окна"""
-        for selector in self.selectors['dialogs']:
-            try:
-                return WebDriverWait(self.driver, 5).until(
-                    EC.visibility_of_element_located((By.CSS_SELECTOR, selector))
-                )
-            except TimeoutException:
-                continue
-        return None
+        combined_selector = ", ".join(self.selectors['dialogs'])
+        try:
+            return WebDriverWait(self.driver, 5).until(
+                EC.visibility_of_element_located((By.CSS_SELECTOR, combined_selector))
+            )
+        except TimeoutException:
+            return None
 
     def _get_dialog_text(self, dialog_element) -> str:
         """Извлечение текста из диалогового окна с несколькими стратегиями."""
@@ -385,8 +384,16 @@ class AdvancedDialogExtractor:
             if text:
                 return text
 
-            # Strategy 3: innerHTML via JavaScript (less clean, but sometimes necessary)
-            text = self.driver.execute_script("return arguments[0].innerHTML;", dialog_element).strip()
+            # Strategy 3: innerText via JavaScript
+            text = self.driver.execute_script("return arguments[0].innerText;", dialog_element).strip()
+            if text:
+                return text
+
+            # Strategy 4: innerHTML via JavaScript (less clean, but sometimes necessary)
+            html = self.driver.execute_script("return arguments[0].innerHTML;", dialog_element)
+            # Простая очистка HTML
+            clean_html = re.sub('<[^<]+?>', ' ', html)
+            text = ' '.join(clean_html.split()).strip()
             if text:
                 return text
         except Exception as e:
@@ -421,6 +428,15 @@ class AdvancedDialogExtractor:
                 if len(ip_parts) == 4 and all(part.isdigit() and 0 <= int(part) <= 255 for part in ip_parts):
                     server_data['ip'] = ip
                     break
+
+        # Дополнительная попытка найти IP, если предыдущие не сработали
+        if not server_data['ip']:
+            ip_match = re.search(r'([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})', text)
+            if ip_match:
+                ip = ip_match.group(1).strip()
+                ip_parts = ip.split('.')
+                if len(ip_parts) == 4 and all(part.isdigit() and 0 <= int(part) <= 255 for part in ip_parts):
+                    server_data['ip'] = ip
 
         # Определяем протокол
         text_lower = text.lower()
