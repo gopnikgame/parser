@@ -403,14 +403,20 @@ class AdvancedDialogExtractor:
         return text
 
     def _parse_dialog_text(self, text: str, index: int) -> dict:
-        """Парсинг текста диалога для извлечения данных сервера"""
+        """Парсинг текста диалога для извлечения данных сервера (v2.1, legacy compatible)"""
         server_data = {
             'name': '',
-            'ip': '',
-            'protocol': 'DNSCrypt',
+            'ip': None,
+            'protocol': None,
+            'dnssec': False,
+            'no_filters': False,
+            'no_logs': False,
             'row_index': index,
             'extraction_method': 'dialog'
         }
+
+        if not text:
+            return server_data
 
         # Извлекаем имя сервера
         for pattern in self.data_patterns['server_name']:
@@ -418,30 +424,41 @@ class AdvancedDialogExtractor:
             if match:
                 server_data['name'] = match.group(1).strip()
                 break
-
-        # Извлекаем IP
-        for pattern in self.data_patterns['ip_address']:
+        
+        # Ищем IP адрес (логика из старого парсера)
+        ip_patterns = [
+            r'(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})',
+            r'Address[^:]*:?\s*(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})',
+            r'IP[^:]*:?\s*(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})'
+        ]
+        for pattern in ip_patterns:
             matches = re.findall(pattern, text)
             for ip in matches:
-                ip = ip.strip()
-                # Простая валидация IP
-                ip_parts = ip.split('.')
-                if len(ip_parts) == 4 and all(part.isdigit() and 0 <= int(part) <= 255 for part in ip_parts):
+                octets = ip.split('.')
+                if all(0 <= int(octet) <= 255 for octet in octets):
                     server_data['ip'] = ip
                     break
             if server_data['ip']:
                 break
 
-        # Определяем протокол
-        text_lower = text.lower()
-        if 'doh' in text_lower or 'dns-over-https' in text_lower:
-            server_data['protocol'] = 'DoH'
-        elif 'dot' in text_lower or 'dns-over-tls' in text_lower:
-            server_data['protocol'] = 'DoT'
-        elif 'relay' in text_lower:
+        # Ищем протокол
+        if 'DNSCrypt relay' in text:
             server_data['protocol'] = 'DNSCrypt relay'
+        elif 'DNSCrypt' in text:
+            server_data['protocol'] = 'DNSCrypt'
+        elif 'DoH' in text or 'DNS-over-HTTPS' in text:
+            server_data['protocol'] = 'DoH'
+        elif 'DoT' in text or 'DNS-over-TLS' in text:
+            server_data['protocol'] = 'DoT'
 
-        return server_data if server_data['name'] else None
+        # Ищем флаги
+        text_lower = text.lower()
+        # Более надежная проверка флагов
+        server_data['dnssec'] = 'dnssec' in text_lower and 'true' in text_lower
+        server_data['no_filters'] = ('no filter' in text_lower or 'no filtering' in text_lower) and 'true' in text_lower
+        server_data['no_logs'] = ('no log' in text_lower or 'no logging' in text_lower) and 'true' in text_lower
+
+        return server_data if server_data['name'] and server_data['ip'] else None
 
     def _close_dialog_if_present(self):
         """Закрытие диалогового окна, если оно присутствует"""
