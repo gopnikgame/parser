@@ -13,7 +13,6 @@ services:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
     network_mode: host
     restart: unless-stopped
-    user: "1000:1000"
     command: >
       sh -c "
         mkdir -p /tmp/.X11-unix && 
@@ -39,7 +38,6 @@ services:
     network_mode: host
     profiles:
       - manual
-    user: "1000:1000"
     command: >
       sh -c "
         mkdir -p /tmp/.X11-unix && 
@@ -66,7 +64,6 @@ services:
     network_mode: host
     profiles:
       - modular
-    user: "1000:1000"
     command: >
       sh -c "
         mkdir -p /tmp/.X11-unix && 
