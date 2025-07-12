@@ -419,3 +419,4 @@ FodyWeavers.xsd
 Logs.txt
 env .env.example
 /Other
+/env
