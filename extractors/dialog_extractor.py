@@ -1,5 +1,5 @@
 """
-Извлечение данных из диалогов - ПОЛНОСТЬЮ ПЕРЕПИСАН для Vue.js v2.1
+Извлечение данных из диалогов - для Vue.js v2.1
 """
 import time
 import re
@@ -101,9 +101,10 @@ class AdvancedDialogExtractor:
                 r'sdns:\/\/([^\n\r"\'<]+)',  # More specific to avoid grabbing unrelated text
             ],
             'ip_address': [
-                r'Address:\s*([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})',
-                r'IP:\s*([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})',
-                r'\b([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})\b',  # Added word boundary
+                r'Address:[^:]*?\s*([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})',
+                r'IP\sAddress:[^:]*?\s*([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})',
+                r'IP:[^:]*?\s*([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})',
+                r'\b([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})\b',
             ],
             'protocol': [
                 r'Protocol:\s*(DNSCrypt|DoH|DoT|DNSCrypt relay)',
@@ -420,23 +421,16 @@ class AdvancedDialogExtractor:
 
         # Извлекаем IP
         for pattern in self.data_patterns['ip_address']:
-            match = re.search(pattern, text)
-            if match:
-                ip = match.group(1).strip()
+            matches = re.findall(pattern, text)
+            for ip in matches:
+                ip = ip.strip()
                 # Простая валидация IP
                 ip_parts = ip.split('.')
                 if len(ip_parts) == 4 and all(part.isdigit() and 0 <= int(part) <= 255 for part in ip_parts):
                     server_data['ip'] = ip
                     break
-
-        # Дополнительная попытка найти IP, если предыдущие не сработали
-        if not server_data['ip']:
-            ip_match = re.search(r'([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})', text)
-            if ip_match:
-                ip = ip_match.group(1).strip()
-                ip_parts = ip.split('.')
-                if len(ip_parts) == 4 and all(part.isdigit() and 0 <= int(part) <= 255 for part in ip_parts):
-                    server_data['ip'] = ip
+            if server_data['ip']:
+                break
 
         # Определяем протокол
         text_lower = text.lower()
